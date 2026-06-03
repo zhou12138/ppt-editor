@@ -157,6 +157,69 @@ echo --- 9p. 删除动画 ---
 python pptx_editor_com.py test_report.pptx "第1页删除动画" --output test_out_delanim.pptx
 echo.
 
+echo.
+echo ========== 10. C# .NET COM 测试 ==========
+echo.
+
+REM 查找 csc.exe
+set CSC=
+if exist "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" set CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
+if defined CSC (
+    echo 🔧 编译 C# COM 版...
+    
+    REM 查找 Office Interop DLL
+    set PIA_PP=
+    set PIA_OFFICE=
+    for /f "delims=" %%d in ('dir /s /b "C:\Windows\assembly\GAC_MSIL\Microsoft.Office.Interop.PowerPoint" 2^>nul') do (
+        for /f "delims=" %%f in ('dir /b /s "%%d\Microsoft.Office.Interop.PowerPoint.dll" 2^>nul') do set PIA_PP=%%f
+    )
+    for /f "delims=" %%d in ('dir /s /b "C:\Windows\assembly\GAC_MSIL\office" 2^>nul') do (
+        for /f "delims=" %%f in ('dir /b /s "%%d\office.dll" 2^>nul') do set PIA_OFFICE=%%f
+    )
+    
+    if defined PIA_PP if defined PIA_OFFICE (
+        %CSC% /nologo /out:pptx_editor_com.exe /reference:"%PIA_PP%" /reference:"%PIA_OFFICE%" pptx_editor_com.cs >nul 2>&1
+        if exist pptx_editor_com.exe (
+            echo ✅ 编译成功
+            echo.
+            echo --- 10a. C# 查看结构 ---
+            pptx_editor_com.exe test_report.pptx --inspect
+            echo.
+            echo --- 10b. C# 修改标题 ---
+            pptx_editor_com.exe test_report.pptx "把标题改成「C# 测试成功」" --output test_out_cs_title.pptx
+            echo.
+            echo --- 10c. C# 加粗+颜色 ---
+            pptx_editor_com.exe test_report.pptx "第1页标题加粗" --output test_out_cs_bold.pptx
+            echo.
+            echo --- 10d. C# 动画 ---
+            pptx_editor_com.exe test_report.pptx "给第1页标题添加动画淡入" --output test_out_cs_anim.pptx
+            echo.
+            echo --- 10e. C# 切换效果 ---
+            pptx_editor_com.exe test_report.pptx "第1页切换效果淡化" --output test_out_cs_trans.pptx
+            echo.
+            echo --- 10f. C# 添加文本框 ---
+            pptx_editor_com.exe test_report.pptx "添加文本框 内容是CSharp Test" --output test_out_cs_textbox.pptx
+            echo.
+            echo --- 10g. C# 居中对齐 ---
+            pptx_editor_com.exe test_report.pptx "第1页标题居中对齐" --output test_out_cs_align.pptx
+            echo.
+            echo --- 10h. C# 背景填充 ---
+            pptx_editor_com.exe test_report.pptx "第1页标题背景改成蓝色" --output test_out_cs_fill.pptx
+            echo.
+        ) else (
+            echo ⚠️ C# 编译失败
+            %CSC% /nologo /out:pptx_editor_com.exe /reference:"%PIA_PP%" /reference:"%PIA_OFFICE%" pptx_editor_com.cs
+        )
+    ) else (
+        echo ⚠️ 未找到 Office Interop DLL，跳过 C# 测试
+        echo    需要安装 Office PIA
+    )
+) else (
+    echo ⚠️ 未找到 csc.exe，跳过 C# 测试
+    echo    需要 .NET Framework 4.x
+)
+echo.
+
 :done
 echo.
 echo ============================================
@@ -180,6 +243,7 @@ for %%f in (*_structure.json) do (if exist "%%f" (del "%%f" & echo   删除 %%f 
 for %%f in (test_report.pptx) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
 for %%f in (test_report.pdf) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
 for %%f in (slide_*.png test_img.png) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
+for %%f in (pptx_editor_com.exe pptx_editor_com.pdb) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
 echo.
 echo ✅ 清理完成
 pause
