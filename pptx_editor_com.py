@@ -11,6 +11,8 @@ COM 独有能力（python-pptx 做不到的）:
   - 切换效果: "第2页切换效果淡化"
   - 导出PDF:  "导出PDF"
   - 导出图片: --export-images
+  - 删除/修改动画: "删除动画" / "清除动画"
+  - 添加文本框/图片/幻灯片管理/表格操作/对齐/填充/边框/移动/缩放
 """
 import sys, os, re, json
 
@@ -167,11 +169,17 @@ class PowerPointCOM:
             if ok: hits.append(shape)
         return hits
 
-    # ---- 操作 ----
+    # ---- 文本操作 ----
     def modify_text(self, shape, text):
         old = shape.TextFrame.TextRange.Text
         shape.TextFrame.TextRange.Text = text
         return f"文本: '{old[:20]}' → '{text[:20]}'"
+
+    def modify_partial_text(self, shape, start, length, new_text):
+        """修改部分文本 (COM 1-based index)"""
+        old = shape.TextFrame.TextRange.Characters(start, length).Text
+        shape.TextFrame.TextRange.Characters(start, length).Text = new_text
+        return f"部分文本: '{old}' → '{new_text}'"
 
     def modify_font(self, shape, **kw):
         tr = shape.TextFrame.TextRange
@@ -182,16 +190,111 @@ class PowerPointCOM:
             if old > 0:
                 new = round(old * kw["font_size_factor"], 1)
                 tr.Font.Size = new; ch.append(f"字号 {old}→{new}")
-        if "bold" in kw:     tr.Font.Bold = kw["bold"];     ch.append("加粗" if kw["bold"] else "取消加粗")
-        if "italic" in kw:   tr.Font.Italic = kw["italic"]; ch.append("斜体")
-        if "color" in kw:    tr.Font.Color.RGB = kw["color"]; ch.append(f"颜色→{hex(kw['color'])}")
-        if "font_name" in kw: tr.Font.Name = kw["font_name"]; ch.append(f"字体→{kw['font_name']}")
+        if "bold" in kw:          tr.Font.Bold = kw["bold"];          ch.append("加粗" if kw["bold"] else "取消加粗")
+        if "italic" in kw:        tr.Font.Italic = kw["italic"];      ch.append("斜体")
+        if "underline" in kw:     tr.Font.Underline = kw["underline"]; ch.append("下划线" if kw["underline"] else "取消下划线")
+        if "strikethrough" in kw: tr.Font.Strikethrough = -1 if kw["strikethrough"] else 0; ch.append("删除线" if kw["strikethrough"] else "取消删除线")
+        if "color" in kw:         tr.Font.Color.RGB = kw["color"];    ch.append(f"颜色→{hex(kw['color'])}")
+        if "font_name" in kw:     tr.Font.Name = kw["font_name"];    ch.append(f"字体→{kw['font_name']}")
         return ", ".join(ch)
+
+    def set_alignment(self, shape, align):
+        """设置段落对齐: 左=1, 居中=2, 右=3, 两端=4"""
+        align_map = {"左": 1, "left": 1, "居中": 2, "center": 2, "右": 3, "right": 3, "两端": 4, "justify": 4}
+        val = align_map.get(align, align) if isinstance(align, str) else align
+        for pi in range(1, shape.TextFrame.TextRange.Paragraphs().Count + 1):
+            shape.TextFrame.TextRange.Paragraphs(pi).ParagraphFormat.Alignment = val
+        return f"对齐方式 → {align}"
+
+    # ---- 形状外观 ----
+    def set_fill(self, shape, color_bgr):
+        """设置形状填充颜色 (BGR)"""
+        shape.Fill.Solid()
+        shape.Fill.ForeColor.RGB = color_bgr
+        return f"填充颜色 → {hex(color_bgr)}"
+
+    def set_border(self, shape, color_bgr=None, weight=None):
+        """设置形状边框"""
+        ch = []
+        if color_bgr is not None:
+            shape.Line.ForeColor.RGB = color_bgr; ch.append(f"边框颜色→{hex(color_bgr)}")
+        if weight is not None:
+            shape.Line.Weight = weight; ch.append(f"边框粗细→{weight}")
+        return ", ".join(ch) if ch else "边框未修改"
+
+    # ---- 形状位置/大小 ----
+    def move_shape(self, shape, left=None, top=None):
+        ch = []
+        if left is not None: shape.Left = left; ch.append(f"Left→{left}")
+        if top is not None:  shape.Top = top;   ch.append(f"Top→{top}")
+        return f"移动 [{shape.Name}] {', '.join(ch)}"
+
+    def resize_shape(self, shape, width=None, height=None):
+        ch = []
+        if width is not None:  shape.Width = width;   ch.append(f"Width→{width}")
+        if height is not None: shape.Height = height; ch.append(f"Height→{height}")
+        return f"缩放 [{shape.Name}] {', '.join(ch)}"
 
     def delete_shape(self, shape):
         n = shape.Name; shape.Delete(); return f"删除 [{n}]"
 
-    # ---- COM 独有 ----
+    # ---- 文本框/图片 ----
+    def add_textbox(self, slide_idx, text, left=100, top=100, width=300, height=50):
+        """添加文本框 (msoTextOrientationHorizontal=1)"""
+        slide = self.prs.Slides(slide_idx)
+        shape = slide.Shapes.AddTextbox(1, left, top, width, height)
+        shape.TextFrame.TextRange.Text = text
+        return f"第{slide_idx}页添加文本框: '{text[:30]}'"
+
+    def add_picture(self, slide_idx, pic_path, left=100, top=100, width=200, height=150):
+        """插入图片"""
+        slide = self.prs.Slides(slide_idx)
+        abs_path = os.path.abspath(pic_path)
+        slide.Shapes.AddPicture(abs_path, False, True, left, top, width, height)
+        return f"第{slide_idx}页插入图片: {pic_path}"
+
+    # ---- 幻灯片管理 ----
+    def add_slide(self, index=None, layout=1):
+        """添加幻灯片: ppLayoutTitle=1, ppLayoutText=2, ppLayoutBlank=12"""
+        if index is None: index = self.prs.Slides.Count + 1
+        self.prs.Slides.Add(index, layout)
+        return f"添加幻灯片: 第{index}页 (layout={layout})"
+
+    def delete_slide(self, slide_idx):
+        self.prs.Slides(slide_idx).Delete()
+        return f"删除第{slide_idx}页"
+
+    def move_slide(self, slide_idx, new_pos):
+        self.prs.Slides(slide_idx).MoveTo(new_pos)
+        return f"第{slide_idx}页移动到第{new_pos}页"
+
+    # ---- 表格操作 ----
+    def modify_cell(self, slide_idx, target, row, col, text):
+        """修改表格单元格 (1-based)"""
+        shapes = self.find_shape(slide_idx, target if target else {"type": "table"})
+        if not shapes: return f"第{slide_idx}页未找到表格"
+        table = shapes[0].Table
+        old = table.Cell(row, col).Shape.TextFrame.TextRange.Text
+        table.Cell(row, col).Shape.TextFrame.TextRange.Text = text
+        return f"表格({row},{col}): '{old[:20]}' → '{text[:20]}'"
+
+    def add_table_row(self, shape):
+        shape.Table.Rows.Add()
+        return f"表格添加一行 (共{shape.Table.Rows.Count}行)"
+
+    def delete_table_row(self, shape, row):
+        shape.Table.Rows(row).Delete()
+        return f"表格删除第{row}行"
+
+    def add_table_column(self, shape):
+        shape.Table.Columns.Add()
+        return f"表格添加一列 (共{shape.Table.Columns.Count}列)"
+
+    def delete_table_column(self, shape, col):
+        shape.Table.Columns(col).Delete()
+        return f"表格删除第{col}列"
+
+    # ---- COM 独有: 动画 ----
     def add_animation(self, slide_idx, shape, effect="appear"):
         emap = {"appear":1, "fly":2, "fade":10, "zoom":53, "bounce":26}
         eid = emap.get(effect, 1)
@@ -199,6 +302,26 @@ class PowerPointCOM:
             Shape=shape, effectId=eid, trigger=1)
         return f"动画 [{shape.Name}] → {effect}"
 
+    def remove_animation(self, slide_idx, anim_index=None):
+        """删除动画: 指定索引删单个，不指定删全部"""
+        seq = self.prs.Slides(slide_idx).TimeLine.MainSequence
+        if anim_index:
+            seq(anim_index).Delete()
+            return f"第{slide_idx}页删除第{anim_index}个动画"
+        else:
+            count = seq.Count
+            while seq.Count > 0:
+                seq(1).Delete()
+            return f"第{slide_idx}页清除所有动画 ({count}个)"
+
+    def modify_animation_effect(self, slide_idx, anim_index, new_effect):
+        """修改动画效果类型"""
+        emap = {"appear":1, "fly":2, "fade":10, "zoom":53, "bounce":26}
+        eid = emap.get(new_effect, new_effect) if isinstance(new_effect, str) else new_effect
+        self.prs.Slides(slide_idx).TimeLine.MainSequence(anim_index).EffectType = eid
+        return f"第{slide_idx}页第{anim_index}个动画效果 → {new_effect}"
+
+    # ---- COM 独有: 切换/导出 ----
     def set_transition(self, slide_idx, trans="fade", dur=1.0):
         tmap = {"fade":3849, "push":3336, "wipe":769, "split":3073, "none":0, "dissolve":1537, "cut":257}
         s = self.prs.Slides(slide_idx)
@@ -237,44 +360,161 @@ def parse_intent(instruction):
         if not re.search(r'(?:改|换|替换|变)[成为]?\s*$', before):
             target["text_match"] = qm.group(1); break
 
-    # 修改文本
-    m = re.search(r'(?:改|换|替换|变)[成为]?\s*[""「](.+?)[""」]', instruction)
-    if m: intents.append({"action":"modify_text","slide":slide_num,"target":target,"params":{"new_text":m.group(1)}})
+    # ---- 幻灯片管理 (先匹配，避免被"删除"等通用规则吃掉) ----
 
-    # 字号
+    # 添加幻灯片
+    m = re.search(r'(?:添加|新增|插入)\s*(?:一)?[页张]?\s*(?:幻灯片|PPT)?', instruction)
+    if m and not any(w in instruction for w in ["文本框","图片","动画","一行","一列"]):
+        layout = 12  # ppLayoutBlank
+        if "标题" in instruction: layout = 1
+        elif "文本" in instruction or "内容" in instruction: layout = 2
+        m2 = re.search(r'(?:在)?第(\d+)[页张](?:后|之后)?', instruction)
+        idx = int(m2.group(1)) + 1 if m2 else None
+        intents.append({"action":"add_slide","slide":slide_num,"target":target,"params":{"index":idx,"layout":layout}})
+
+    # 删除幻灯片
+    if re.search(r'删除第\d+[页张]$', instruction) or re.search(r'删除?\s*第\d+[页张]\s*(?:幻灯片)?$', instruction):
+        if slide_num:
+            intents.append({"action":"delete_slide","slide":slide_num,"target":target,"params":{}})
+
+    # 移动幻灯片
+    m = re.search(r'第(\d+)[页张]\s*移[动到]+\s*第(\d+)[页张]', instruction)
+    if m:
+        intents.append({"action":"move_slide","slide":int(m.group(1)),"target":target,"params":{"new_pos":int(m.group(2))}})
+
+    # ---- 表格操作 ----
+
+    # 修改单元格
+    m = re.search(r'表格\s*第?(\d+)\s*行\s*第?(\d+)\s*列\s*(?:改[成为]?|换[成为]?|设为)?\s*[""「]?(.+?)[""」]?\s*$', instruction)
+    if m:
+        intents.append({"action":"modify_cell","slide":slide_num,"target":{"type":"table"},
+                         "params":{"row":int(m.group(1)),"col":int(m.group(2)),"text":m.group(3)}})
+
+    # 表格添加/删除行
+    if re.search(r'表格\s*(?:添加|加|新增)\s*(?:一)?行', instruction):
+        intents.append({"action":"table_row_add","slide":slide_num,"target":{"type":"table"},"params":{}})
+    m = re.search(r'表格\s*删除?\s*第?(\d+)\s*行', instruction)
+    if m and "列" not in instruction:
+        intents.append({"action":"table_row_delete","slide":slide_num,"target":{"type":"table"},"params":{"row":int(m.group(1))}})
+
+    # 表格添加/删除列
+    if re.search(r'表格\s*(?:添加|加|新增)\s*(?:一)?列', instruction):
+        intents.append({"action":"table_col_add","slide":slide_num,"target":{"type":"table"},"params":{}})
+    m = re.search(r'表格\s*删除?\s*第?(\d+)\s*列', instruction)
+    if m and "行" not in instruction:
+        intents.append({"action":"table_col_delete","slide":slide_num,"target":{"type":"table"},"params":{"col":int(m.group(1))}})
+
+    # ---- 添加文本框 ----
+    m = re.search(r'(?:添加|加个?)\s*文本框\s*(?:内容[是为]?)?\s*[""「]?(.+?)[""」]?\s*$', instruction)
+    if m:
+        intents.append({"action":"add_textbox","slide":slide_num or 1,"target":target,"params":{"text":m.group(1)}})
+
+    # ---- 插入图片 ----
+    m = re.search(r'(?:插入|添加)\s*图片\s*[""「]?(\S+?\.\w{3,4})[""」]?', instruction)
+    if m:
+        intents.append({"action":"add_picture","slide":slide_num or 1,"target":target,"params":{"pic_path":m.group(1)}})
+
+    # ---- 对齐 ----
+    m = re.search(r'(左|右|居中|两端)\s*对齐', instruction)
+    if m:
+        intents.append({"action":"set_alignment","slide":slide_num,"target":target,"params":{"align":m.group(1)}})
+
+    # ---- 填充 ----
+    for cn, bgr in COLOR_MAP.items():
+        if re.search(rf'(?:背景|填充)\s*(?:改[成为]?|换[成为]?)?\s*{cn}', instruction):
+            intents.append({"action":"set_fill","slide":slide_num,"target":target,"params":{"color_bgr":bgr}})
+            break
+
+    # ---- 边框 ----
+    border_params = {}
+    for cn, bgr in COLOR_MAP.items():
+        if re.search(rf'边框\s*(?:改[成为]?|换[成为]?)?\s*{cn}', instruction):
+            border_params["color_bgr"] = bgr; break
+    m = re.search(r'边框\s*(?:加粗|粗细|宽度)\s*(?:改[成为]?)?\s*(\d+(?:\.\d+)?)', instruction)
+    if m: border_params["weight"] = float(m.group(1))
+    elif "边框加粗" in instruction: border_params["weight"] = 3.0
+    if border_params:
+        intents.append({"action":"set_border","slide":slide_num,"target":target,"params":border_params})
+
+    # ---- 移动形状 ----
+    m = re.search(r'(?:移动|位置)\s*(?:到|调到)?\s*\(?\s*(\d+)\s*[,，]\s*(\d+)\s*\)?', instruction)
+    if m:
+        intents.append({"action":"move_shape","slide":slide_num,"target":target,
+                         "params":{"left":int(m.group(1)),"top":int(m.group(2))}})
+    elif "移动到左上" in instruction:
+        intents.append({"action":"move_shape","slide":slide_num,"target":target,"params":{"left":0,"top":0}})
+
+    # ---- 缩放形状 ----
+    m = re.search(r'宽度\s*(?:改[成为]?|调[成为]?|设为)?\s*(\d+)', instruction)
+    if m:
+        intents.append({"action":"resize_shape","slide":slide_num,"target":target,"params":{"width":int(m.group(1))}})
+    m = re.search(r'高度\s*(?:改[成为]?|调[成为]?|设为)?\s*(\d+)', instruction)
+    if m:
+        intents.append({"action":"resize_shape","slide":slide_num,"target":target,"params":{"height":int(m.group(1))}})
+    if "放大" in instruction and not any(i["action"] == "resize_shape" for i in intents):
+        intents.append({"action":"resize_shape","slide":slide_num,"target":target,"params":{"scale_factor":1.5}})
+    elif "缩小" in instruction and not any(i["action"] == "resize_shape" for i in intents):
+        intents.append({"action":"resize_shape","slide":slide_num,"target":target,"params":{"scale_factor":0.7}})
+
+    # ---- 删除/清除动画 ----
+    if re.search(r'(?:删除|清除|去掉)\s*(?:所有)?\s*动画', instruction):
+        intents.append({"action":"remove_animation","slide":slide_num,"target":target,"params":{}})
+
+    # ---- 修改文本 ----
+    m = re.search(r'(?:改|换|替换|变)[成为]?\s*[""「](.+?)[""」]', instruction)
+    if m and not any(i["action"] in ("modify_cell","add_textbox") for i in intents):
+        intents.append({"action":"modify_text","slide":slide_num,"target":target,"params":{"new_text":m.group(1)}})
+
+    # ---- 字号 ----
     m = re.search(r'字号?\s*(?:改[成为]?|调[成为]?|设为)?\s*(\d+)', instruction)
     if m: intents.append({"action":"modify_font","slide":slide_num,"target":target,"params":{"font_size":int(m.group(1))}})
     elif "大一点" in instruction: intents.append({"action":"modify_font","slide":slide_num,"target":target,"params":{"font_size_factor":1.3}})
     elif "小一点" in instruction: intents.append({"action":"modify_font","slide":slide_num,"target":target,"params":{"font_size_factor":0.75}})
 
+    # 加粗
     if any(w in instruction for w in ["加粗","粗体","bold"]):
         intents.append({"action":"modify_font","slide":slide_num,"target":target,"params":{"bold":True}})
 
-    for cn, bgr in COLOR_MAP.items():
-        if cn in instruction:
-            if re.search(rf'(?:改|换|变|调)[成为]?\s*{cn}', instruction):
-                intents.append({"action":"modify_font","slide":slide_num,"target":target,"params":{"color":bgr}})
-            break
+    # 下划线
+    if any(w in instruction for w in ["下划线","underline"]):
+        intents.append({"action":"modify_font","slide":slide_num,"target":target,"params":{"underline":True}})
 
+    # 删除线
+    if any(w in instruction for w in ["删除线","删除线效果","strikethrough"]):
+        intents.append({"action":"modify_font","slide":slide_num,"target":target,"params":{"strikethrough":True}})
+
+    # 颜色（字体颜色，非填充/边框）
+    if not any(i["action"] in ("set_fill","set_border") for i in intents):
+        for cn, bgr in COLOR_MAP.items():
+            if cn in instruction:
+                if re.search(rf'(?:改|换|变|调)[成为]?\s*{cn}', instruction):
+                    intents.append({"action":"modify_font","slide":slide_num,"target":target,"params":{"color":bgr}})
+                break
+
+    # 删除元素（排除已匹配的删除幻灯片/动画/表格行列）
     if any(w in instruction for w in ["删除","删掉","去掉"]):
-        intents.append({"action":"delete","slide":slide_num,"target":target,"params":{}})
+        if not any(i["action"] in ("delete_slide","remove_animation","table_row_delete","table_col_delete") for i in intents):
+            intents.append({"action":"delete","slide":slide_num,"target":target,"params":{}})
 
-    # COM 独有
+    # COM 独有: 添加动画
     m = re.search(r'(?:添加|加|设置)\s*动画\s*(\S+)?', instruction)
     if m:
         ef = m.group(1) or "appear"
         cn_map = {"淡入":"fade","飞入":"fly","出现":"appear","缩放":"zoom"}
         intents.append({"action":"animation","slide":slide_num,"target":target,"params":{"effect":cn_map.get(ef,ef)}})
 
+    # COM 独有: 切换效果
     m = re.search(r'切换\s*(?:效果)?\s*(\S+)?', instruction)
     if m:
         tr = m.group(1) or "fade"
         cn_map = {"淡化":"fade","推入":"push","擦除":"wipe"}
         intents.append({"action":"transition","slide":slide_num,"target":target,"params":{"transition":cn_map.get(tr,tr)}})
 
+    # 导出PDF
     if any(w in instruction for w in ["导出pdf","导出PDF","转pdf","转PDF"]):
         intents.append({"action":"export_pdf","slide":slide_num,"target":target,"params":{}})
 
+    # 字体名称
     m = re.search(r'字体\s*(?:改[成为]?|换[成为]?|用)?\s*(\S+)', instruction)
     if m and m.group(1) not in ["大","小","一点"]:
         intents.append({"action":"modify_font","slide":slide_num,"target":target,"params":{"font_name":m.group(1)}})
@@ -296,6 +536,44 @@ def run(ppt, intents, output):
             for si in rng: changes.append(ppt.set_transition(si, p.get("transition","fade")))
             continue
 
+        # 幻灯片管理 (不需要查找shape)
+        if a == "add_slide":
+            changes.append(f"✅ {ppt.add_slide(p.get('index'), p.get('layout',1))}")
+            continue
+        if a == "delete_slide":
+            changes.append(f"✅ {ppt.delete_slide(sn)}")
+            continue
+        if a == "move_slide":
+            changes.append(f"✅ {ppt.move_slide(sn, p['new_pos'])}")
+            continue
+
+        # 添加文本框 (不需要查找shape)
+        if a == "add_textbox":
+            si = sn or 1
+            changes.append(f"✅ {ppt.add_textbox(si, p['text'], p.get('left',100), p.get('top',100), p.get('width',300), p.get('height',50))}")
+            continue
+
+        # 插入图片 (不需要查找shape)
+        if a == "add_picture":
+            si = sn or 1
+            changes.append(f"✅ {ppt.add_picture(si, p['pic_path'], p.get('left',100), p.get('top',100), p.get('width',200), p.get('height',150))}")
+            continue
+
+        # 修改单元格 (用modify_cell自带find_shape)
+        if a == "modify_cell":
+            si = sn or 1
+            changes.append(f"✅ 第{si}页 {ppt.modify_cell(si, t, p['row'], p['col'], p['text'])}")
+            continue
+
+        # 删除/清除动画
+        if a == "remove_animation":
+            rng = [sn] if sn else list(range(1, ppt.prs.Slides.Count+1))
+            for si in rng:
+                try: changes.append(f"✅ {ppt.remove_animation(si, p.get('anim_index'))}")
+                except Exception as ex: print(f"⚠️ 第{si}页动画操作错误: {ex}")
+            continue
+
+        # 需要查找shape的操作
         rng = [sn] if sn else list(range(1, ppt.prs.Slides.Count+1))
         for si in rng:
             shapes = ppt.find_shape(si, t)
@@ -314,6 +592,29 @@ def run(ppt, intents, output):
                         changes.append(f"✅ 第{si}页 {ppt.delete_shape(shape)}")
                     elif a == "animation":
                         changes.append(f"✅ 第{si}页 {ppt.add_animation(si, shape, p.get('effect','appear'))}")
+                    elif a == "set_alignment":
+                        changes.append(f"✅ 第{si}页 [{shape.Name}] {ppt.set_alignment(shape, p['align'])}")
+                    elif a == "set_fill":
+                        changes.append(f"✅ 第{si}页 [{shape.Name}] {ppt.set_fill(shape, p['color_bgr'])}")
+                    elif a == "set_border":
+                        changes.append(f"✅ 第{si}页 [{shape.Name}] {ppt.set_border(shape, p.get('color_bgr'), p.get('weight'))}")
+                    elif a == "move_shape":
+                        changes.append(f"✅ 第{si}页 {ppt.move_shape(shape, p.get('left'), p.get('top'))}")
+                    elif a == "resize_shape":
+                        if "scale_factor" in p:
+                            w = shape.Width * p["scale_factor"]
+                            h = shape.Height * p["scale_factor"]
+                            changes.append(f"✅ 第{si}页 {ppt.resize_shape(shape, w, h)}")
+                        else:
+                            changes.append(f"✅ 第{si}页 {ppt.resize_shape(shape, p.get('width'), p.get('height'))}")
+                    elif a == "table_row_add":
+                        changes.append(f"✅ 第{si}页 {ppt.add_table_row(shape)}")
+                    elif a == "table_row_delete":
+                        changes.append(f"✅ 第{si}页 {ppt.delete_table_row(shape, p['row'])}")
+                    elif a == "table_col_add":
+                        changes.append(f"✅ 第{si}页 {ppt.add_table_column(shape)}")
+                    elif a == "table_col_delete":
+                        changes.append(f"✅ 第{si}页 {ppt.delete_table_column(shape, p['col'])}")
                 except Exception as ex:
                     print(f"⚠️ 第{si}页 [{shape.Name}] 错误: {ex}")
 
@@ -330,6 +631,7 @@ def run(ppt, intents, output):
 def interactive(ppt, filepath):
     print(f"\n🎮 交互模式 — 输入自然语言指令，输入 q 退出")
     print(f"   COM 独有: 动画/切换效果/导出PDF/导出图片")
+    print(f"   新增: 文本框/图片/幻灯片管理/表格操作/对齐/填充/边框/移动/缩放")
     desc = ppt.inspect()
     ppt.print_structure(desc)
     
@@ -366,6 +668,15 @@ def main():
         print('  "给第1页标题添加动画淡入"')
         print('  "第2页切换效果淡化"')
         print('  "导出PDF"')
+        print()
+        print("新增能力:")
+        print('  "添加文本框 内容是xxx"')
+        print('  "居中对齐" / "左对齐"')
+        print('  "背景改成红色" / "填充蓝色"')
+        print('  "添加一页" / "删除第3页"')
+        print('  "表格第2行第3列改成xxx"')
+        print('  "插入图片 xxx.png"')
+        print('  "删除动画" / "清除动画"')
         sys.exit(0)
 
     path = sys.argv[1]
