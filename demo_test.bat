@@ -45,19 +45,19 @@ python pptx_editor.py test_report.pptx "把标题改成「Demo 测试成功」"
 echo.
 
 echo ========== 4. 测试：修改字号 ==========
-python pptx_editor.py test_report_modified.pptx "第1页标题字号改成40"
+python pptx_editor.py test_report.pptx "第1页标题字号改成40"
 echo.
 
 echo ========== 5. 测试：加粗 ==========
-python pptx_editor.py test_report_modified.pptx "第1页标题加粗"
+python pptx_editor.py test_report.pptx "第1页标题加粗"
 echo.
 
 echo ========== 6. 测试：改颜色 ==========
-python pptx_editor.py test_report_modified.pptx "第1页标题颜色改成红色"
+python pptx_editor.py test_report.pptx "第1页标题颜色改成红色"
 echo.
 
 echo ========== 7. 测试：删除元素 ==========
-python pptx_editor.py test_report_modified.pptx "删除第2页的表格"
+python pptx_editor.py test_report.pptx "删除第2页的表格"
 echo.
 
 REM COM 版测试（需要 Office）
@@ -78,7 +78,7 @@ python pptx_editor_com.py test_report.pptx "给第1页标题添加动画淡入"
 echo.
 
 echo --- 8c. COM 切换效果 ---
-python pptx_editor_com.py test_report_modified.pptx "第1页切换效果淡化"
+python pptx_editor_com.py test_report.pptx "第1页切换效果淡化"
 echo.
 
 echo --- 8d. COM 导出 PDF ---
