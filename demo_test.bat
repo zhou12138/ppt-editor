@@ -1,6 +1,10 @@
 @echo off
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
+
+REM 清理模式
+if "%1"=="clean" goto :clean
+
 echo ============================================
 echo   PPT Editor - Windows 本地测试 Demo
 echo ============================================
@@ -94,4 +98,20 @@ echo.
 echo 生成的文件:
 dir /b *.pptx *.pdf *.png 2>nul
 echo.
+
+echo.
+echo 💡 清理测试输出: demo_test.bat clean
+pause
+exit /b 0
+
+:clean
+echo 🧹 清理测试输出...
+set count=0
+for %%f in (*_modified.pptx) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
+for %%f in (*_structure.json) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
+for %%f in (test_report.pptx) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
+for %%f in (test_report.pdf) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
+for %%f in (slide_*.png) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
+echo.
+echo ✅ 清理完成
 pause
