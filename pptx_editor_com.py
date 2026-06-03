@@ -200,7 +200,7 @@ class PowerPointCOM:
         return f"动画 [{shape.Name}] → {effect}"
 
     def set_transition(self, slide_idx, trans="fade", dur=1.0):
-        tmap = {"fade":2745, "push":3334, "wipe":2844, "split":2846, "none":0}
+        tmap = {"fade":3849, "push":3336, "wipe":769, "split":3073, "none":0, "dissolve":1537, "cut":257}
         s = self.prs.Slides(slide_idx)
         s.SlideShowTransition.EntryEffect = tmap.get(trans, 2745)
         s.SlideShowTransition.Duration = dur
