@@ -54,6 +54,7 @@ box3.text_frame.text = "总结：本季度表现优异"
 for run in box3.text_frame.paragraphs[0].runs:
     run.font.size = Pt(24)
 
-out = "/home/azureuser/.openclaw/workspace/pptx-editor/test_report.pptx"
+import os
+out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_report.pptx")
 prs.save(out)
 print(f"✅ 测试 PPTX 生成: {out}")
