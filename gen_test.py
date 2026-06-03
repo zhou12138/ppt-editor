@@ -58,3 +58,24 @@ import os
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_report.pptx")
 prs.save(out)
 print(f"✅ 测试 PPTX 生成: {out}")
+
+# 生成测试图片
+try:
+    import struct, zlib
+    def make_png(path, w=100, h=100, r=0, g=120, b=255):
+        def chunk(ctype, data):
+            c = ctype + data
+            return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c) & 0xffffffff)
+        raw = b''
+        for _ in range(h):
+            raw += b'\x00' + bytes([r, g, b]) * w
+        return (b'\x89PNG\r\n\x1a\n' +
+                chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) +
+                chunk(b'IDAT', zlib.compress(raw)) +
+                chunk(b'IEND', b''))
+    img_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_img.png")
+    with open(img_path, 'wb') as f:
+        f.write(make_png(img_path))
+    print(f"✅ 测试图片生成: {img_path}")
+except Exception as e:
+    print(f"⚠️ 测试图片生成失败: {e}")

@@ -89,6 +89,74 @@ echo --- 8e. COM 导出图片 ---
 python pptx_editor_com.py test_report.pptx --export-images
 echo.
 
+echo.
+echo ========== 9. 新增场景测试 ==========
+echo.
+
+echo --- 9a. 添加文本框 ---
+python pptx_editor_com.py test_report.pptx "添加文本框 内容是Hello World" --output test_out_addtextbox.pptx
+echo.
+
+echo --- 9b. 下划线 ---
+python pptx_editor_com.py test_report.pptx "第1页标题下划线" --output test_out_underline.pptx
+echo.
+
+echo --- 9c. 删除线 ---
+python pptx_editor_com.py test_report.pptx "第1页标题删除线" --output test_out_strikethrough.pptx
+echo.
+
+echo --- 9d. 居中对齐 ---
+python pptx_editor_com.py test_report.pptx "第1页标题居中对齐" --output test_out_align.pptx
+echo.
+
+echo --- 9e. 背景填充 ---
+python pptx_editor_com.py test_report.pptx "第1页标题背景改成蓝色" --output test_out_fill.pptx
+echo.
+
+echo --- 9f. 边框 ---
+python pptx_editor_com.py test_report.pptx "第1页标题边框改成红色" --output test_out_border.pptx
+echo.
+
+echo --- 9g. 移动元素 ---
+python pptx_editor_com.py test_report.pptx "第1页标题移动到左上" --output test_out_move.pptx
+echo.
+
+echo --- 9h. 放大元素 ---
+python pptx_editor_com.py test_report.pptx "第1页标题放大" --output test_out_resize.pptx
+echo.
+
+echo --- 9i. 添加页面 ---
+python pptx_editor_com.py test_report.pptx "添加一页" --output test_out_addslide.pptx
+echo.
+
+echo --- 9j. 删除页面 ---
+python pptx_editor_com.py test_report.pptx "删除第4页" --output test_out_delslide.pptx
+echo.
+
+echo --- 9k. 移动页面 ---
+python pptx_editor_com.py test_report.pptx "第3页移到第1页" --output test_out_moveslide.pptx
+echo.
+
+echo --- 9l. 修改表格单元格 ---
+python pptx_editor_com.py test_report.pptx "表格第1行第1列改成测试数据" --output test_out_cell.pptx
+echo.
+
+echo --- 9m. 表格添加一行 ---
+python pptx_editor_com.py test_report.pptx "表格添加一行" --output test_out_addrow.pptx
+echo.
+
+echo --- 9n. 表格添加一列 ---
+python pptx_editor_com.py test_report.pptx "表格添加一列" --output test_out_addcol.pptx
+echo.
+
+echo --- 9o. 插入图片 ---
+python pptx_editor_com.py test_report.pptx "第1页插入图片 test_img.png" --output test_out_picture.pptx
+echo.
+
+echo --- 9p. 删除动画 ---
+python pptx_editor_com.py test_report.pptx "第1页删除动画" --output test_out_delanim.pptx
+echo.
+
 :done
 echo.
 echo ============================================
@@ -111,7 +179,7 @@ for %%f in (*_modified.pptx test_out_*.pptx) do (if exist "%%f" (del "%%f" & ech
 for %%f in (*_structure.json) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
 for %%f in (test_report.pptx) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
 for %%f in (test_report.pdf) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
-for %%f in (slide_*.png) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
+for %%f in (slide_*.png test_img.png) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
 echo.
 echo ✅ 清理完成
 pause
