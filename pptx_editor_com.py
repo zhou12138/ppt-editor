@@ -387,11 +387,19 @@ def main():
             for si in range(1, ppt.prs.Slides.Count+1):
                 ppt.export_image(si, f"slide_{si}.png")
         elif len(sys.argv) > 2 and not sys.argv[2].startswith("--"):
-            instruction = " ".join(sys.argv[2:])
+            args = sys.argv[2:]
+            output = None
+            if "--output" in args:
+                oi = args.index("--output")
+                if oi + 1 < len(args):
+                    output = args[oi + 1]
+                    args = args[:oi] + args[oi+2:]
+            instruction = " ".join(args)
             print(f"📝 指令: {instruction}")
             intents = parse_intent(instruction)
             print(f"🔍 {len(intents)} 个意图: {[i['action'] for i in intents]}")
-            output = path.replace(".pptx", "_modified.pptx")
+            if not output:
+                output = path.replace(".pptx", "_modified.pptx")
             run(ppt, intents, output)
         else:
             desc = ppt.inspect(); ppt.print_structure(desc)

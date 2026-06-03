@@ -41,23 +41,23 @@ python pptx_editor.py test_report.pptx --inspect
 echo.
 
 echo ========== 3. 测试：修改标题 ==========
-python pptx_editor.py test_report.pptx "把标题改成「Demo 测试成功」"
+python pptx_editor.py test_report.pptx "把标题改成「Demo 测试成功」" --output test_out_title.pptx
 echo.
 
 echo ========== 4. 测试：修改字号 ==========
-python pptx_editor.py test_report.pptx "第1页标题字号改成40"
+python pptx_editor.py test_report.pptx "第1页标题字号改成40" --output test_out_fontsize.pptx
 echo.
 
 echo ========== 5. 测试：加粗 ==========
-python pptx_editor.py test_report.pptx "第1页标题加粗"
+python pptx_editor.py test_report.pptx "第1页标题加粗" --output test_out_bold.pptx
 echo.
 
 echo ========== 6. 测试：改颜色 ==========
-python pptx_editor.py test_report.pptx "第1页标题颜色改成红色"
+python pptx_editor.py test_report.pptx "第1页标题颜色改成红色" --output test_out_color.pptx
 echo.
 
 echo ========== 7. 测试：删除元素 ==========
-python pptx_editor.py test_report.pptx "删除第2页的表格"
+python pptx_editor.py test_report.pptx "删除第2页的表格" --output test_out_delete.pptx
 echo.
 
 REM COM 版测试（需要 Office）
@@ -74,15 +74,15 @@ python pptx_editor_com.py test_report.pptx --inspect
 echo.
 
 echo --- 8b. COM 添加动画 ---
-python pptx_editor_com.py test_report.pptx "给第1页标题添加动画淡入"
+python pptx_editor_com.py test_report.pptx "给第1页标题添加动画淡入" --output test_out_animation.pptx
 echo.
 
 echo --- 8c. COM 切换效果 ---
-python pptx_editor_com.py test_report.pptx "第1页切换效果淡化"
+python pptx_editor_com.py test_report.pptx "第1页切换效果淡化" --output test_out_transition.pptx
 echo.
 
 echo --- 8d. COM 导出 PDF ---
-python pptx_editor_com.py test_report.pptx "导出PDF"
+python pptx_editor_com.py test_report.pptx "导出PDF" --output test_out_export.pptx
 echo.
 
 echo --- 8e. COM 导出图片 ---
@@ -107,7 +107,7 @@ exit /b 0
 :clean
 echo 🧹 清理测试输出...
 set count=0
-for %%f in (*_modified.pptx) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
+for %%f in (*_modified.pptx test_out_*.pptx) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
 for %%f in (*_structure.json) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
 for %%f in (test_report.pptx) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
 for %%f in (test_report.pdf) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))

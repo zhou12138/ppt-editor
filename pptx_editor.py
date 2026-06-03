@@ -463,11 +463,20 @@ def main():
         print(f"\n📄 结构已导出: {json_path}")
         sys.exit(0)
     
-    if len(sys.argv) < 3:
+    # 提取 --output 参数
+    output_path = None
+    args = sys.argv[2:]
+    if "--output" in args:
+        oi = args.index("--output")
+        if oi + 1 < len(args):
+            output_path = args[oi + 1]
+            args = args[:oi] + args[oi+2:]
+    
+    if not args:
         print("请提供指令，或用 --inspect 查看结构")
         sys.exit(1)
     
-    instruction = " ".join(sys.argv[2:])
+    instruction = " ".join(args)
     print(f"📝 指令: {instruction}")
     
     # 解析意图
@@ -479,7 +488,8 @@ def main():
             print(f"      params={intent['params']}")
     
     # 执行
-    output_path = pptx_path.replace(".pptx", "_modified.pptx")
+    if not output_path:
+        output_path = pptx_path.replace(".pptx", "_modified.pptx")
     execute(pptx_path, intents, desc, output_path)
 
 
