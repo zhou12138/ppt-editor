@@ -266,6 +266,13 @@ def execute_actions(ppt, actions, dry_run=False):
 def _dispatch(ppt, action, slide, target, params):
     """分派单个操作到 PowerPointCOM 方法"""
 
+    # --- 通用工具操作 ---
+    if action == "sleep":
+        import time
+        seconds = params.get("seconds", 1)
+        time.sleep(seconds)
+        return f"等待 {seconds}s"
+
     # --- 幻灯片级操作 (无需 find_shape) ---
     if action == "add_slide":
         return ppt.add_slide(index=params.get("index"), layout=params.get("layout", 1))
@@ -370,7 +377,7 @@ def _dispatch(ppt, action, slide, target, params):
 # 主流程
 # ---------------------------------------------------------------------------
 def run_single(pptx_path, instruction, output=None, dry_run=False,
-               api_base=None, model=None, api_key=None):
+               api_base=None, model=None, api_key=None, headed=False):
     """单次指令模式 (可作为模块调用)"""
     from pptx_editor_com import PowerPointCOM
 
@@ -378,7 +385,7 @@ def run_single(pptx_path, instruction, output=None, dry_run=False,
     _model = model or get_api_config()[1]
     _api_key = api_key or get_api_config()[2]
 
-    ppt = PowerPointCOM()
+    ppt = PowerPointCOM(visible=headed)
     try:
         ppt.open(pptx_path)
         structure = ppt.inspect()
@@ -395,7 +402,7 @@ def run_single(pptx_path, instruction, output=None, dry_run=False,
         ppt.close()
 
 
-def run_interactive(pptx_path, output=None, api_base=None, model=None, api_key=None):
+def run_interactive(pptx_path, output=None, api_base=None, model=None, api_key=None, headed=False):
     """交互式多轮对话模式"""
     from pptx_editor_com import PowerPointCOM
 
@@ -403,7 +410,7 @@ def run_interactive(pptx_path, output=None, api_base=None, model=None, api_key=N
     _model = model or get_api_config()[1]
     _api_key = api_key or get_api_config()[2]
 
-    ppt = PowerPointCOM()
+    ppt = PowerPointCOM(visible=headed)
     try:
         ppt.open(pptx_path)
         structure = ppt.inspect()
@@ -469,6 +476,7 @@ def main():
     parser.add_argument("--api-base", help="API 端点")
     parser.add_argument("--model", help="模型名称")
     parser.add_argument("--api-key", help="API 密钥")
+    parser.add_argument("--headed", action="store_true", help="以可见窗口模式打开 PowerPoint")
     args = parser.parse_args()
 
     if not os.path.exists(args.pptx_file):
@@ -479,7 +487,7 @@ def main():
 
     if args.inspect:
         from pptx_editor_com import PowerPointCOM
-        ppt = PowerPointCOM()
+        ppt = PowerPointCOM(visible=args.headed)
         try:
             ppt.open(args.pptx_file)
             structure = ppt.inspect()
@@ -492,7 +500,7 @@ def main():
 
     if args.exec_script:
         from pptx_editor_com import PowerPointCOM
-        ppt = PowerPointCOM()
+        ppt = PowerPointCOM(visible=args.headed)
         try:
             ppt.open(args.pptx_file)
             if args.inspect and not args.exec_actions:
@@ -528,7 +536,7 @@ def main():
         except json.JSONDecodeError as e:
             print(f"❌ JSON 解析失败: {e}")
             sys.exit(1)
-        ppt = PowerPointCOM()
+        ppt = PowerPointCOM(visible=args.headed)
         try:
             ppt.open(args.pptx_file)
             if args.inspect:
@@ -545,7 +553,7 @@ def main():
         return
 
     if args.interactive:
-        run_interactive(args.pptx_file, args.output, api_base, model, api_key)
+        run_interactive(args.pptx_file, args.output, api_base, model, api_key, headed=args.headed)
         return
 
     if not args.instruction:
@@ -563,7 +571,7 @@ def main():
     lines = [l.strip() for l in instructions.split("\n") if l.strip()]
 
     from pptx_editor_com import PowerPointCOM
-    ppt = PowerPointCOM()
+    ppt = PowerPointCOM(visible=args.headed)
     try:
         ppt.open(args.pptx_file)
 
