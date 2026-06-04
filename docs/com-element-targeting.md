@@ -335,7 +335,7 @@ COM 中每个 Shape 都有 `.Type` 属性，常见值：
 | 15 | msoScriptAnchor | 脚本 |
 | 17 | msoTextBox | 文本框 |
 | 19 | msoTable | 表格 |
-| 21 | msoMedia | 媒体（音视频） |
+| 16 | msoMedia | 媒体（音视频） |
 | 24 | msoSmartArt | SmartArt |
 | 3 | msoChart | 图表 |
 

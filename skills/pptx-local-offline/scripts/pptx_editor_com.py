@@ -60,7 +60,7 @@ class PowerPointCOM:
         try:
             if shape.Type == 13:
                 info["has_image"] = True
-            elif shape.Type == 21:
+            elif shape.Type == 16:
                 info["has_media"] = True
         except Exception:
             pass
@@ -73,7 +73,7 @@ class PowerPointCOM:
                 info["has_chart"] = True
             elif contained_type == 19:
                 info["has_table"] = True
-            elif contained_type == 21:
+            elif contained_type == 16:
                 info["has_media"] = True
         except Exception:
             pass
