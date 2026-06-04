@@ -102,6 +102,17 @@ p.save()
 p.cleanup()
 ```
 
+## 脚本文件
+
+skill 目录下 `scripts/` 包含所有需要的脚本：
+
+| 文件 | 用途 |
+|------|------|
+| `pptx_editor_com.py` | COM 引擎，70+ 方法，核心执行层 |
+| `pptx_editor_llm.py` | LLM 意图解析，支持 CLI / 交互模式 / HTTP API |
+
+两个文件都部署在同一台 Windows 云服务器上。
+
 ## 注意事项
 
 | 问题 | 说明 |

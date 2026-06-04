@@ -103,6 +103,18 @@ python pptx_editor_llm.py --file "C:\Reports\deck.pptx" --interactive
 
 > **关键：** 需要 7B 及以上模型才能可靠输出结构化 JSON。3B 模型可能出现格式错误。
 
+## 脚本文件
+
+skill 目录下 `scripts/` 包含所有需要的脚本：
+
+| 文件 | 用途 |
+|------|------|
+| `pptx_editor_com.py` | COM 引擎，70+ 方法 |
+| `pptx_editor_llm.py` | LLM 意图解析（连接本地 Ollama） |
+| `pptx_editor.py` | 纯规则引擎，无需 LLM，离线备选方案 |
+
+全部部署在同一台 Windows 机器上，零网络依赖。
+
 ## 注意事项
 
 | 问题 | 说明 |

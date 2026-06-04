@@ -78,6 +78,19 @@ curl -X POST http://localhost:8081/api/tool_call \
 
 从返回的 JSON 中提取执行结果，如需要可下载编辑后的文件。
 
+## 脚本文件
+
+skill 目录下 `scripts/` 包含所有需要的脚本：
+
+| 文件 | 部署位置 | 用途 |
+|------|---------|------|
+| `pptx_editor_com.py` | Windows Worker | COM 引擎，70+ 方法 |
+| `pptx_editor_llm.py` | Linux Agent 端 | LLM 意图解析 + 系统提示词 |
+| `demo_test.py` | Windows Worker | 验证部署：65 个测试用例 |
+| `gen_test.py` | Windows Worker | 生成测试用 PPTX |
+
+Agent 加载 skill 后可通过 `skill_view("pptx-remote-landgod", file_path="scripts/pptx_editor_com.py")` 获取脚本内容。
+
 ## 注意事项与陷阱
 
 | 问题 | 说明 |
