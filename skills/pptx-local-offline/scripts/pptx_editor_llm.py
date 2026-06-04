@@ -147,7 +147,7 @@ def _run_script_path(ppt, script_path, note_slide=None, notes_progress=False):
 def _print_session_help(mode):
     """Print available commands for interactive action/script sessions."""
     print("\n💡 会话命令:")
-    print("  inspect                 查看当前结构")
+    print("  inspect [slide]         查看当前结构或指定页结构")
     print("  status                  查看当前会话状态")
     print("  save                    保存当前文件")
     print("  saveas <path>           另存为指定文件")
@@ -181,7 +181,18 @@ def _parse_session_command(raw, mode):
         return None
 
     lowered = text.lower()
-    if lowered in ("help", "inspect", "status", "save", "quit", "exit", "close"):
+    if lowered == "inspect" or lowered.startswith("inspect "):
+        parts = text.split(maxsplit=1)
+        slide = None
+        if len(parts) > 1:
+            try:
+                slide = int(parts[1].strip())
+            except ValueError as exc:
+                raise ValueError("inspect 后只支持页码，例如 inspect 3") from exc
+            if slide < 1:
+                raise ValueError("inspect 页码必须从 1 开始")
+        return {"command": "inspect", "slide": slide}
+    if lowered in ("help", "status", "save", "quit", "exit", "close"):
         return {"command": lowered}
     if lowered.startswith("saveas "):
         return {"command": "saveas", "path": text[7:].strip()}
@@ -274,7 +285,15 @@ def _run_interactive_session(pptx_path, mode, initial_payload=None, output=None,
                 continue
             if cmd == "inspect":
                 structure = ppt.inspect()
-                ppt.print_structure(structure)
+                slide = command.get("slide")
+                if slide is None:
+                    ppt.print_structure(structure)
+                    continue
+                slide_data = [item for item in structure["slides"] if item.get("index") == slide]
+                if not slide_data:
+                    print(f"❌ 第 {slide} 页不存在")
+                    continue
+                ppt.print_structure({"slides": slide_data})
                 continue
             if cmd == "status":
                 _print_session_status(ppt, mode, current_output, modified)
