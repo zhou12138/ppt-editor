@@ -216,7 +216,8 @@ p.print_structure(desc)
 ==================================================
   [2] Title 1 [标题] (中上) → Performance Metrics
        字体:Calibri Light 字号:36.0 粗:True
-  [4] Table 3 (中中) → (无)
+  [4] Content Placeholder 4 [OBJECT] (中中) → [图片]
+  [5] Table 3 (中中) → [表格 5×4]
        表格: 5×4
 ```
 
@@ -239,6 +240,10 @@ p.print_structure(desc)
           "height": 80.0,
           "text": "PPT Editor Demo",
           "is_placeholder": true,
+          "has_image": false,
+          "has_chart": false,
+          "has_table": false,
+          "has_media": false,
           "ph_type": 3,
           "ph_type_name": "居中标题",
           "position_label": "中上",
@@ -257,6 +262,8 @@ p.print_structure(desc)
   ]
 }
 ```
+
+当元素没有文本但包含图片、图表、表格或媒体时，`inspect()` 会通过 `has_image`、`has_chart`、`has_table`、`has_media` 明确标记，`print_structure()` 也会优先显示这些标签而不是 `(无)`。
 
 ---
 

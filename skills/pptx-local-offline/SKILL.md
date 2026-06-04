@@ -45,6 +45,8 @@ python pptx_editor_llm.py deck.pptx --interactive
 
 本地 Claude Code 等 AI Agent 直接生成 Python 脚本，脚本内可用 `ppt`（已打开的 PowerPointCOM 实例）和 `filepath` 变量。**无需任何 API Key，无需 Ollama。**
 
+`inspect()` 现在会额外标记非文本内容：占位符或普通 shape 里如果包含图片、图表、表格或媒体，会在结构里给出 `has_image`、`has_chart`、`has_table`、`has_media`，CLI 输出也会显示 `[图片]`、`[图表]` 之类的摘要，不再把这类元素误显示成“(无)”。
+
 现在脚本模式额外内建了两个辅助函数：
 - `log_note("文本", slide=None, append=True)`：把执行进度写到演讲者备注
 - `sleep(seconds, slide=None, note=None, append=True)`：可选先写备注，再等待若干秒

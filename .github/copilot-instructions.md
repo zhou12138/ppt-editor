@@ -7,7 +7,7 @@ pptx_editor_com.py          # COM 引擎（所有 PowerPoint 操作方法）
 pptx_editor_llm.py          # 统一入口（三种执行模式）
 pptx_editor.py              # 纯规则引擎（python-pptx，跨平台）
 COM_STANDARD.md             # COM 接口标准文档（对象模型/枚举常量/VBA 对照）
-demo_test.bat               # 一键测试（headed/headless/clean）
+demo_test_skill.bat         # skill 脚本 smoke test（含 clean）
 skills/                     # 三种部署场景的 skill 文档
 ```
 

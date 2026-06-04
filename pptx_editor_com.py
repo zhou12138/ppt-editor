@@ -44,6 +44,65 @@ class PowerPointCOM:
         if visible: self.app.Visible = True
         self.prs = None
 
+    def _detect_shape_content(self, shape):
+        info = {"has_image": False, "has_chart": False, "has_table": False, "has_media": False}
+
+        try:
+            info["has_table"] = bool(shape.HasTable)
+        except Exception:
+            pass
+
+        try:
+            info["has_chart"] = bool(shape.HasChart)
+        except Exception:
+            pass
+
+        try:
+            if shape.Type == 13:
+                info["has_image"] = True
+            elif shape.Type == 21:
+                info["has_media"] = True
+        except Exception:
+            pass
+
+        try:
+            shape.PictureFormat
+            info["has_image"] = True
+        except Exception:
+            pass
+
+        try:
+            contained_type = shape.PlaceholderFormat.ContainedType
+            if contained_type == 13:
+                info["has_image"] = True
+            elif contained_type == 8:
+                info["has_chart"] = True
+            elif contained_type == 19:
+                info["has_table"] = True
+            elif contained_type == 21:
+                info["has_media"] = True
+        except Exception:
+            pass
+
+        return info
+
+    def _format_shape_summary(self, element):
+        if element.get("text"):
+            return element["text"][:40].replace("\n", "↵")
+
+        labels = []
+        if element.get("has_image"):
+            labels.append("[图片]")
+        if element.get("has_chart"):
+            labels.append("[图表]")
+        if element.get("table"):
+            labels.append(f"[表格 {len(element['table'])}×{len(element['table'][0])}]")
+        elif element.get("has_table"):
+            labels.append("[表格]")
+        if element.get("has_media"):
+            labels.append("[媒体]")
+        return " ".join(labels) if labels else "(无)"
+
     def _get_save_format(self, path):
         ext = os.path.splitext(path)[1].lower()
         if ext == ".pptx":
@@ -96,7 +155,9 @@ class PowerPointCOM:
                 e = {"id": shape.Id, "name": shape.Name, "type": shape.Type,
                      "left": round(shape.Left,1), "top": round(shape.Top,1),
                      "width": round(shape.Width,1), "height": round(shape.Height,1),
-                     "text": "", "is_placeholder": False}
+                     "text": "", "is_placeholder": False,
+                     "has_image": False, "has_chart": False,
+                     "has_table": False, "has_media": False}
                 
                 cx = shape.Left + shape.Width/2
                 cy = shape.Top + shape.Height/2
@@ -111,6 +172,8 @@ class PowerPointCOM:
                         e["ph_type"] = pf.Type
                         e["ph_type_name"] = PH_NAMES.get(pf.Type, f"({pf.Type})")
                 except: pass
+
+                e.update(self._detect_shape_content(shape))
                 
                 try:
                     if shape.HasTextFrame:
@@ -142,7 +205,7 @@ class PowerPointCOM:
             print(f"\n{'='*50}\n📄 第 {s['index']} 页 ({s['layout']})\n{'='*50}")
             for e in s["elements"]:
                 ph = f" [{e.get('ph_type_name','')}]" if e.get("is_placeholder") else ""
-                txt = (e.get("text","") or "(无)")[:40].replace("\n","↵")
+                txt = self._format_shape_summary(e)
                 idx = s["elements"].index(e) + 1
                 print(f"  [{idx}] [{e['id']}] {e['name']}{ph} ({e['position_label']}) → {txt}")
                 if e.get("paragraphs"):

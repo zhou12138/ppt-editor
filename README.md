@@ -40,8 +40,8 @@ python pptx_editor_com.py report.pptx --export-images
 ## Windows 本地测试
 
 ```bash
-demo_test.bat          # 运行所有测试
-demo_test.bat clean    # 一键清理测试输出
+demo_test_skill.bat          # 仅测试 skills/pptx-local-offline/scripts
+demo_test_skill.bat clean    # 清理 skill 脚本测试缓存
 ```
 
 ---
