@@ -44,6 +44,21 @@ class PowerPointCOM:
         if visible: self.app.Visible = True
         self.prs = None
 
+    def _get_save_format(self, path):
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".pptx":
+            return 24  # ppSaveAsOpenXMLPresentation
+        if ext == ".ppt":
+            return 1  # ppSaveAsPresentation
+        return None
+
+    def _save_presentation(self, path):
+        fmt = self._get_save_format(path)
+        if fmt is None:
+            self.prs.SaveAs(path)
+        else:
+            self.prs.SaveAs(path, fmt)
+
     def open(self, path):
         self.filepath = os.path.abspath(path)
         with_window = self.app.Visible
@@ -59,11 +74,11 @@ class PowerPointCOM:
         pythoncom.CoUninitialize()
 
     def save(self, out=None):
+        path = os.path.abspath(out) if out else self.filepath
+        self._save_presentation(path)
         if out:
-            self.prs.SaveAs(os.path.abspath(out))
             print(f"💾 已另存为: {out}")
         else:
-            self.prs.Save()
             print(f"💾 已保存")
 
     # ---- 结构查看 ----
@@ -842,7 +857,7 @@ class PowerPointCOM:
             idx = self.prs.Slides.Count
             self.prs.Slides.InsertFromFile(abs_fp, idx)
         if output_path:
-            self.prs.SaveAs(os.path.abspath(output_path))
+            self._save_presentation(os.path.abspath(output_path))
         return f"Merged {len(file_paths)} presentations"
 
 
