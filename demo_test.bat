@@ -1,173 +1,173 @@
 @echo off
-chcp 65001 >nul 2>&1
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
-REM 清理模式
+REM Clean mode
 if "%1"=="clean" goto :clean
 
 echo ============================================
-echo   PPT Editor - Windows 本地测试 Demo
+echo   PPT Editor - Windows Local Test Demo
 echo ============================================
 echo.
 
-REM 检查依赖
+REM Check Python
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo ❌ Python 未安装
+    echo [FAIL] Python not installed
     pause
     exit /b 1
 )
 
-REM 检查 python-pptx
+REM Check python-pptx
 python -c "import pptx" >nul 2>&1
 if errorlevel 1 (
-    echo 📦 安装 python-pptx...
+    echo [INFO] Installing python-pptx...
     pip install python-pptx
 )
 
 echo.
-echo ========== 1. 生成测试 PPT ==========
+echo ========== 1. Generate test PPTX ==========
 python gen_test.py
 if errorlevel 1 (
-    echo ❌ 生成失败
+    echo [FAIL] Generation failed
     pause
     exit /b 1
 )
-echo ✅ test_report.pptx 已生成
+echo [OK] test_report.pptx generated
 echo.
 
-echo ========== 2. 查看结构 ==========
+echo ========== 2. Inspect structure ==========
 python pptx_editor.py test_report.pptx --inspect
 echo.
 
-echo ========== 3. 测试：修改标题 ==========
-python pptx_editor.py test_report.pptx "把标题改成「Demo 测试成功」" --output test_out_title.pptx
+echo ========== 3. Test: modify title ==========
+python pptx_editor.py test_report.pptx "put title as Demo Test OK" --output test_out_title.pptx
 echo.
 
-echo ========== 4. 测试：修改字号 ==========
-python pptx_editor.py test_report.pptx "第1页标题字号改成40" --output test_out_fontsize.pptx
+echo ========== 4. Test: font size ==========
+python pptx_editor.py test_report.pptx "slide 1 title font size 40" --output test_out_fontsize.pptx
 echo.
 
-echo ========== 5. 测试：加粗 ==========
-python pptx_editor.py test_report.pptx "第1页标题加粗" --output test_out_bold.pptx
+echo ========== 5. Test: bold ==========
+python pptx_editor.py test_report.pptx "slide 1 title bold" --output test_out_bold.pptx
 echo.
 
-echo ========== 6. 测试：改颜色 ==========
-python pptx_editor.py test_report.pptx "第1页标题颜色改成红色" --output test_out_color.pptx
+echo ========== 6. Test: color ==========
+python pptx_editor.py test_report.pptx "slide 1 title color red" --output test_out_color.pptx
 echo.
 
-echo ========== 7. 测试：删除元素 ==========
-python pptx_editor.py test_report.pptx "删除第2页的表格" --output test_out_delete.pptx
+echo ========== 7. Test: delete element ==========
+python pptx_editor.py test_report.pptx "delete table on slide 2" --output test_out_delete.pptx
 echo.
 
-REM COM 版测试（需要 Office）
-echo ========== 8. COM 版测试（需要 Office）==========
+REM COM tests (require Office)
+echo ========== 8. COM Tests (require Office) ==========
 python -c "import win32com.client" >nul 2>&1
 if errorlevel 1 (
-    echo ⚠️  pywin32 未安装，跳过 COM 测试
-    echo    安装: pip install pywin32
+    echo [WARN] pywin32 not installed, skipping COM tests
+    echo        Install: pip install pywin32
     goto :done
 )
 
-echo --- 8a. COM 查看结构 ---
+echo --- 8a. COM inspect ---
 python pptx_editor_com.py test_report.pptx --inspect
 echo.
 
-echo --- 8b. COM 添加动画 ---
-python pptx_editor_com.py test_report.pptx "给第1页标题添加动画淡入" --output test_out_animation.pptx
+echo --- 8b. COM animation ---
+python pptx_editor_com.py test_report.pptx "slide 1 title fade in animation" --output test_out_animation.pptx
 echo.
 
-echo --- 8c. COM 切换效果 ---
-python pptx_editor_com.py test_report.pptx "第1页切换效果淡化" --output test_out_transition.pptx
+echo --- 8c. COM transition ---
+python pptx_editor_com.py test_report.pptx "slide 1 transition fade" --output test_out_transition.pptx
 echo.
 
-echo --- 8d. COM 导出 PDF ---
-python pptx_editor_com.py test_report.pptx "导出PDF" --output test_out_export.pptx
+echo --- 8d. COM export PDF ---
+python pptx_editor_com.py test_report.pptx "export PDF" --output test_out_export.pptx
 echo.
 
-echo --- 8e. COM 导出图片 ---
+echo --- 8e. COM export images ---
 python pptx_editor_com.py test_report.pptx --export-images
 echo.
 
 echo.
-echo ========== 9. 新增场景测试 ==========
+echo ========== 9. Extended Tests ==========
 echo.
 
-echo --- 9a. 添加文本框 ---
-python pptx_editor_com.py test_report.pptx "添加文本框 内容是Hello World" --output test_out_addtextbox.pptx
+echo --- 9a. Add textbox ---
+python pptx_editor_com.py test_report.pptx "add textbox with text Hello World" --output test_out_addtextbox.pptx
 echo.
 
-echo --- 9b. 下划线 ---
-python pptx_editor_com.py test_report.pptx "第1页标题下划线" --output test_out_underline.pptx
+echo --- 9b. Underline ---
+python pptx_editor_com.py test_report.pptx "slide 1 title underline" --output test_out_underline.pptx
 echo.
 
-echo --- 9c. 删除线 ---
-python pptx_editor_com.py test_report.pptx "第1页标题删除线" --output test_out_strikethrough.pptx
+echo --- 9c. Strikethrough ---
+python pptx_editor_com.py test_report.pptx "slide 1 title strikethrough" --output test_out_strikethrough.pptx
 echo.
 
-echo --- 9d. 居中对齐 ---
-python pptx_editor_com.py test_report.pptx "第1页标题居中对齐" --output test_out_align.pptx
+echo --- 9d. Center align ---
+python pptx_editor_com.py test_report.pptx "slide 1 title center align" --output test_out_align.pptx
 echo.
 
-echo --- 9e. 背景填充 ---
-python pptx_editor_com.py test_report.pptx "第1页标题背景改成蓝色" --output test_out_fill.pptx
+echo --- 9e. Fill color ---
+python pptx_editor_com.py test_report.pptx "slide 1 title background blue" --output test_out_fill.pptx
 echo.
 
-echo --- 9f. 边框 ---
-python pptx_editor_com.py test_report.pptx "第1页标题边框改成红色" --output test_out_border.pptx
+echo --- 9f. Border ---
+python pptx_editor_com.py test_report.pptx "slide 1 title border red" --output test_out_border.pptx
 echo.
 
-echo --- 9g. 移动元素 ---
-python pptx_editor_com.py test_report.pptx "第1页标题移动到左上" --output test_out_move.pptx
+echo --- 9g. Move element ---
+python pptx_editor_com.py test_report.pptx "slide 1 title move to top left" --output test_out_move.pptx
 echo.
 
-echo --- 9h. 放大元素 ---
-python pptx_editor_com.py test_report.pptx "第1页标题放大" --output test_out_resize.pptx
+echo --- 9h. Resize element ---
+python pptx_editor_com.py test_report.pptx "slide 1 title enlarge" --output test_out_resize.pptx
 echo.
 
-echo --- 9i. 添加页面 ---
-python pptx_editor_com.py test_report.pptx "添加一页" --output test_out_addslide.pptx
+echo --- 9i. Add slide ---
+python pptx_editor_com.py test_report.pptx "add a slide" --output test_out_addslide.pptx
 echo.
 
-echo --- 9j. 删除页面 ---
-python pptx_editor_com.py test_report.pptx "删除第4页" --output test_out_delslide.pptx
+echo --- 9j. Delete slide ---
+python pptx_editor_com.py test_report.pptx "delete slide 4" --output test_out_delslide.pptx
 echo.
 
-echo --- 9k. 移动页面 ---
-python pptx_editor_com.py test_report.pptx "第3页移到第1页" --output test_out_moveslide.pptx
+echo --- 9k. Move slide ---
+python pptx_editor_com.py test_report.pptx "move slide 3 to position 1" --output test_out_moveslide.pptx
 echo.
 
-echo --- 9l. 修改表格单元格 ---
-python pptx_editor_com.py test_report.pptx "表格第1行第1列改成测试数据" --output test_out_cell.pptx
+echo --- 9l. Modify table cell ---
+python pptx_editor_com.py test_report.pptx "table row 1 col 1 change to test data" --output test_out_cell.pptx
 echo.
 
-echo --- 9m. 表格添加一行 ---
-python pptx_editor_com.py test_report.pptx "表格添加一行" --output test_out_addrow.pptx
+echo --- 9m. Add table row ---
+python pptx_editor_com.py test_report.pptx "table add a row" --output test_out_addrow.pptx
 echo.
 
-echo --- 9n. 表格添加一列 ---
-python pptx_editor_com.py test_report.pptx "表格添加一列" --output test_out_addcol.pptx
+echo --- 9n. Add table column ---
+python pptx_editor_com.py test_report.pptx "table add a column" --output test_out_addcol.pptx
 echo.
 
-echo --- 9o. 插入图片 ---
-python pptx_editor_com.py test_report.pptx "第1页插入图片 test_img.png" --output test_out_picture.pptx
+echo --- 9o. Insert picture ---
+python pptx_editor_com.py test_report.pptx "slide 1 insert picture test_img.png" --output test_out_picture.pptx
 echo.
 
-echo --- 9p. 删除动画 ---
-python pptx_editor_com.py test_report.pptx "第1页删除动画" --output test_out_delanim.pptx
+echo --- 9p. Remove animation ---
+python pptx_editor_com.py test_report.pptx "slide 1 remove animation" --output test_out_delanim.pptx
 echo.
 
 echo.
-echo ========== 10. C# .NET COM 测试 ==========
+echo ========== 10. C# .NET COM Tests ==========
 echo.
 
-REM 查找 csc.exe
+REM Find csc.exe
 set CSC=
 if exist "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" set CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
 if defined CSC (
-    echo 🔧 编译 C# COM 版...
-    
-    REM 查找 Office Interop DLL
+    echo [INFO] Compiling C# COM version...
+
+    REM Find Office Interop DLL
     set PIA_PP=
     set PIA_OFFICE=
     for /f "delims=" %%d in ('dir /s /b "C:\Windows\assembly\GAC_MSIL\Microsoft.Office.Interop.PowerPoint" 2^>nul') do (
@@ -176,74 +176,74 @@ if defined CSC (
     for /f "delims=" %%d in ('dir /s /b "C:\Windows\assembly\GAC_MSIL\office" 2^>nul') do (
         for /f "delims=" %%f in ('dir /b /s "%%d\office.dll" 2^>nul') do set PIA_OFFICE=%%f
     )
-    
+
     if defined PIA_PP if defined PIA_OFFICE (
-        %CSC% /nologo /out:pptx_editor_com.exe /reference:"%PIA_PP%" /reference:"%PIA_OFFICE%" pptx_editor_com.cs >nul 2>&1
+        %CSC% /nologo /out:pptx_editor_com.exe /reference:"!PIA_PP!" /reference:"!PIA_OFFICE!" pptx_editor_com.cs >nul 2>&1
         if exist pptx_editor_com.exe (
-            echo ✅ 编译成功
+            echo [OK] Compiled successfully
             echo.
-            echo --- 10a. C# 查看结构 ---
+            echo --- 10a. C# inspect ---
             pptx_editor_com.exe test_report.pptx --inspect
             echo.
-            echo --- 10b. C# 修改标题 ---
-            pptx_editor_com.exe test_report.pptx "把标题改成「C# 测试成功」" --output test_out_cs_title.pptx
+            echo --- 10b. C# modify title ---
+            pptx_editor_com.exe test_report.pptx "change title to CSharp Test OK" --output test_out_cs_title.pptx
             echo.
-            echo --- 10c. C# 加粗+颜色 ---
-            pptx_editor_com.exe test_report.pptx "第1页标题加粗" --output test_out_cs_bold.pptx
+            echo --- 10c. C# bold ---
+            pptx_editor_com.exe test_report.pptx "slide 1 title bold" --output test_out_cs_bold.pptx
             echo.
-            echo --- 10d. C# 动画 ---
-            pptx_editor_com.exe test_report.pptx "给第1页标题添加动画淡入" --output test_out_cs_anim.pptx
+            echo --- 10d. C# animation ---
+            pptx_editor_com.exe test_report.pptx "slide 1 title fade in animation" --output test_out_cs_anim.pptx
             echo.
-            echo --- 10e. C# 切换效果 ---
-            pptx_editor_com.exe test_report.pptx "第1页切换效果淡化" --output test_out_cs_trans.pptx
+            echo --- 10e. C# transition ---
+            pptx_editor_com.exe test_report.pptx "slide 1 transition fade" --output test_out_cs_trans.pptx
             echo.
-            echo --- 10f. C# 添加文本框 ---
-            pptx_editor_com.exe test_report.pptx "添加文本框 内容是CSharp Test" --output test_out_cs_textbox.pptx
+            echo --- 10f. C# add textbox ---
+            pptx_editor_com.exe test_report.pptx "add textbox with text CSharp Test" --output test_out_cs_textbox.pptx
             echo.
-            echo --- 10g. C# 居中对齐 ---
-            pptx_editor_com.exe test_report.pptx "第1页标题居中对齐" --output test_out_cs_align.pptx
+            echo --- 10g. C# center align ---
+            pptx_editor_com.exe test_report.pptx "slide 1 title center align" --output test_out_cs_align.pptx
             echo.
-            echo --- 10h. C# 背景填充 ---
-            pptx_editor_com.exe test_report.pptx "第1页标题背景改成蓝色" --output test_out_cs_fill.pptx
+            echo --- 10h. C# fill color ---
+            pptx_editor_com.exe test_report.pptx "slide 1 title background blue" --output test_out_cs_fill.pptx
             echo.
         ) else (
-            echo ⚠️ C# 编译失败
-            %CSC% /nologo /out:pptx_editor_com.exe /reference:"%PIA_PP%" /reference:"%PIA_OFFICE%" pptx_editor_com.cs
+            echo [WARN] C# compilation failed
+            %CSC% /nologo /out:pptx_editor_com.exe /reference:"!PIA_PP!" /reference:"!PIA_OFFICE!" pptx_editor_com.cs
         )
     ) else (
-        echo ⚠️ 未找到 Office Interop DLL，跳过 C# 测试
-        echo    需要安装 Office PIA
+        echo [WARN] Office Interop DLL not found, skipping C# tests
+        echo        Need Office PIA installed
     )
 ) else (
-    echo ⚠️ 未找到 csc.exe，跳过 C# 测试
-    echo    需要 .NET Framework 4.x
+    echo [WARN] csc.exe not found, skipping C# tests
+    echo        Need .NET Framework 4.x
 )
 echo.
 
 :done
 echo.
 echo ============================================
-echo   ✅ 测试完成！
+echo   [OK] All tests completed!
 echo ============================================
 echo.
-echo 生成的文件:
+echo Generated files:
 dir /b *.pptx *.pdf *.png 2>nul
 echo.
 
 echo.
-echo 💡 清理测试输出: demo_test.bat clean
+echo Tip: Clean test output with: demo_test.bat clean
 pause
 exit /b 0
 
 :clean
-echo 🧹 清理测试输出...
+echo Cleaning test output...
 set count=0
-for %%f in (*_modified.pptx test_out_*.pptx) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
-for %%f in (*_structure.json) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
-for %%f in (test_report.pptx) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
-for %%f in (test_report.pdf) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
-for %%f in (slide_*.png test_img.png) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
-for %%f in (pptx_editor_com.exe pptx_editor_com.pdb) do (if exist "%%f" (del "%%f" & echo   删除 %%f & set /a count+=1))
+for %%f in (*_modified.pptx test_out_*.pptx) do (if exist "%%f" (del "%%f" & echo   Deleted %%f & set /a count+=1))
+for %%f in (*_structure.json) do (if exist "%%f" (del "%%f" & echo   Deleted %%f & set /a count+=1))
+for %%f in (test_report.pptx) do (if exist "%%f" (del "%%f" & echo   Deleted %%f & set /a count+=1))
+for %%f in (test_report.pdf) do (if exist "%%f" (del "%%f" & echo   Deleted %%f & set /a count+=1))
+for %%f in (slide_*.png test_img.png) do (if exist "%%f" (del "%%f" & echo   Deleted %%f & set /a count+=1))
+for %%f in (pptx_editor_com.exe pptx_editor_com.pdb) do (if exist "%%f" (del "%%f" & echo   Deleted %%f & set /a count+=1))
 echo.
-echo ✅ 清理完成
+echo [OK] Cleanup done
 pause
