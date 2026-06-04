@@ -7,6 +7,9 @@ Usage: python demo_test.py [--headed]
 """
 import sys, os, time
 
+# Always work from the script's own directory
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
 headed = "--headed" in sys.argv
 DELAY = 1.5 if headed else 0
 
