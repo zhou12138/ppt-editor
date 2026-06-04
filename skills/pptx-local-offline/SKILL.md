@@ -45,6 +45,8 @@ python pptx_editor_llm.py deck.pptx --interactive
 
 本地 Claude Code 等 AI Agent 直接生成 Python 脚本，脚本内可用 `ppt`（已打开的 PowerPointCOM 实例）和 `filepath` 变量。**无需任何 API Key，无需 Ollama。**
 
+底层执行策略现在支持通过 `--backend pywin32|vba` 切换。默认是 `pywin32`。`vba` 策略会通过 `Application.Run` 调用 VBA 桥接宏，适合已有宏工程或准备把动作下沉到 VBA 的场景。当前 `vba` 策略推荐搭配 `--exec-actions` / `--interactive-actions` 使用；`--exec-script` 仍然只支持 Python。
+
 `inspect()` 现在会额外标记非文本内容：占位符或普通 shape 里如果包含图片、图表、表格或媒体，会在结构里给出 `has_image`、`has_chart`、`has_table`、`has_media`，CLI 输出也会显示 `[图片]`、`[图表]` 之类的摘要，不再把这类元素误显示成“(无)”。
 
 现在脚本模式额外内建了两个辅助函数：
@@ -151,6 +153,8 @@ JSON 会话模式会保持同一个 COM 会话，持续从 stdin 读取命令。
 | `--headed` | 以可见窗口模式打开 PowerPoint | 全部 |
 | `--notes-progress` | 自动把当前指令或脚本进度写到演讲者备注 | A, B, C |
 | `--note-slide` | 将进度备注固定写到指定页 | A, B, C |
+| `--backend` | 选择底层策略：`pywin32` 或 `vba` | B, C |
+| `--vba-module` | 指定 VBA 桥接宏模块名，默认 `PptEditorBridge` | B, C |
 
 ## 安装配置（所有模式通用）
 
@@ -200,6 +204,7 @@ setx OPENAI_API_KEY "ollama"
 | **Notes 进度显示** | `--notes-progress` 默认会覆盖目标备注页当前内容；如需保留历史请在脚本里用 `log_note(..., append=True)` |
 | **内存竞争（模式 A）** | Ollama + PowerPoint 同时运行，建议 16GB+ |
 | **模型质量（模式 A）** | 本地模型不如 GPT-4/Claude，复杂指令可能需多次尝试 |
+| **VBA 策略要求** | 需先把 `references/PptEditorBridge.bas` 导入到启用宏的演示文稿或 add-in，并补齐桥接函数 |
 
 ## 适用场景
 
@@ -211,3 +216,5 @@ setx OPENAI_API_KEY "ollama"
 ## 参考文档
 
 - `references/setup-guide.md` - Ollama 安装与模型选择详细指南
+- `references/interactive-session-guide.md` - 交互会话命令协议
+- `references/PptEditorBridge.bas` - VBA backend 桥接模块模板
