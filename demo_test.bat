@@ -17,10 +17,12 @@ echo   Mode: %VIS%
 echo ===================================================
 echo.
 
+set SCRIPTS=%~dp0skills\pptx-remote-landgod\scripts
+
 if "%VIS%"=="True" (
-    call python demo_test.py --headed
+    call python "%SCRIPTS%\demo_test.py" --headed
 ) else (
-    call python demo_test.py
+    call python "%SCRIPTS%\demo_test.py"
 )
 
 echo.
