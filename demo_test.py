@@ -4,9 +4,10 @@ Opens PowerPoint ONCE and runs all tests sequentially.
 
 Usage: python demo_test.py [--headed]
 """
-import sys, os, traceback
+import sys, os, time, traceback
 
 headed = "--headed" in sys.argv
+DELAY = 1.5 if headed else 0  # seconds between each test in headed mode
 
 from pptx_editor_com import PowerPointCOM
 
@@ -23,6 +24,8 @@ def test(name, fn):
             print(f"    -> {result}")
         passed += 1
         print(f"    [OK]")
+        if DELAY > 0:
+            time.sleep(DELAY)
     except Exception as e:
         failed += 1
         errors.append((name, str(e)))
@@ -214,7 +217,10 @@ def main():
         test("save_final", lambda: (p.save("test_out_final.pptx"), "saved")[1])
 
     finally:
-        p.close()
+        if headed:
+            print("\n  [HEADED] PowerPoint kept open for review. Close it manually when done.")
+        else:
+            p.close()
 
     # ---- SUMMARY ----
     print("\n" + "=" * 50)
