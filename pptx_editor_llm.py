@@ -29,7 +29,7 @@ SYSTEM_PROMPT = r"""你是一个 PowerPoint 编辑助手。用户会给你一个
 ### 文本操作
 - modify_text: 修改文本
   {action:"modify_text", slide:1, target:{type:"title"}, params:{new_text:"新文本"}}
-  target 可含: type(title/subtitle/body/table/picture), position(左上/中中/右下等), text_match(匹配文本片段)
+  target 可含: type(title/subtitle/body/table/picture), position(左上/中中/右下等), text_match(匹配文本片段), name(形状名称子串), index(1-based形状序号)
 
 - modify_font: 修改字体样式
   {action:"modify_font", slide:1, target:{...}, params:{font_size:24, bold:true, italic:false, underline:false, strikethrough:false, color:255, font_name:"微软雅黑", font_size_factor:1.5}}
@@ -116,8 +116,11 @@ RGB转BGR公式: BGR = R + G*256 + B*65536
 2. slide 是 1-based 页码
 3. target 用于定位已有形状; 不需要 target 时可省略
 4. target.position 是形状的【当前位置】，用于定位形状，不是移动/缩放的目标位置。移动目标放在 params.left / params.top。例如"把标题移到左上"→ target:{type:"title"}, params:{left:0, top:0}
-5. 若指令模糊且你无法确定，输出 {"clarify": "你的问题"} (单个对象，非数组)
-6. 一条指令可能需要多个操作，全部放入数组
+5. target.name 按形状名称子串匹配（不区分大小写）；target.index 按 Shapes 集合中的序号（1-based）精确匹配。适用于密集页面中 type+position 无法区分时。
+   例: {action:"modify_text", slide:1, target:{name:"TextBox 3"}, params:{new_text:"新内容"}}
+   例: {action:"modify_font", slide:2, target:{index:5}, params:{bold:true}}
+6. 若指令模糊且你无法确定，输出 {"clarify": "你的问题"} (单个对象，非数组)
+7. 一条指令可能需要多个操作，全部放入数组
 """
 
 

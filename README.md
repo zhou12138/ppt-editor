@@ -60,7 +60,7 @@ demo_test.bat clean    # 一键清理测试输出
  [{action, slide, target, params}, ...]   ← 意图列表
        │
        ▼
- find_shape()            ← 按 type/position/text 组合定位元素
+ find_shape()            ← 按 type/position/text/name/index 五维定位元素
        │
        ▼
  modify / delete / animate / transition   ← 执行操作
@@ -95,6 +95,8 @@ re.search(r'第(\d+)[页张]', instruction)
 | | 图片/picture → `picture` | `shape.Type == 13` |
 | **位置** | 左上/右上/左下/右下/居中 | 元素中心点在页面九宫格的位置 |
 | **文本** | `"引号中的文字"` | `shape.TextFrame.TextRange.Text` 包含该文字 |
+| **名称** | `name:XXX` 或 `名称:XXX` | `shape.Name` 包含该子串（不区分大小写） |
+| **索引** | `#N` 或 `第N个` | Shapes 集合中第 N 个元素（1-based） |
 
 位置计算逻辑：
 ```
