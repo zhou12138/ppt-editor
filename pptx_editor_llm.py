@@ -1,15 +1,27 @@
 """
-PPTX 自然语言编辑器 — LLM 意图解析 + COM 执行 (Windows Only)
+PPTX 编辑器 — LLM 意图解析 + COM 执行 (Windows Only)
+支持三种执行模式: LLM自然语言、本地脚本执行、本地JSON动作执行
 需要: pip install pywin32 requests + Microsoft Office + OpenAI-compatible API
 
 用法:
+  # LLM 模式 (需要 API key)
   python pptx_editor_llm.py <pptx文件> "把标题改成红色"
   python pptx_editor_llm.py <pptx文件> --interactive
-  python pptx_editor_llm.py <pptx文件> --inspect
   python pptx_editor_llm.py <pptx文件> "指令" --dry-run
   python pptx_editor_llm.py <pptx文件> "指令" --output out.pptx
 
-环境变量:
+  # 本地脚本执行 (无需 API)
+  python pptx_editor_llm.py <pptx文件> --exec-script edit.py
+  python pptx_editor_llm.py <pptx文件> --exec-script edit.py --output out.pptx
+
+  # 本地JSON动作执行 (无需 API)
+  python pptx_editor_llm.py <pptx文件> --exec-actions '[{"action":"modify_font","slide":1,"target":{"type":"title"},"params":{"bold":true}}]'
+  python pptx_editor_llm.py <pptx文件> --exec-actions actions.json --dry-run
+
+  # 查看结构
+  python pptx_editor_llm.py <pptx文件> --inspect
+
+环境变量 (仅 LLM 模式需要):
   OPENAI_API_KEY       API密钥 (必需)
   OPENAI_API_BASE      API端点 (可选, 兼容OpenAI的API)
   OPENAI_BASE_URL      同上 (备选)
@@ -29,7 +41,7 @@ SYSTEM_PROMPT = r"""你是一个 PowerPoint 编辑助手。用户会给你一个
 ### 文本操作
 - modify_text: 修改文本
   {action:"modify_text", slide:1, target:{type:"title"}, params:{new_text:"新文本"}}
-  target 可含: type(title/subtitle/body/table/picture), position(左上/中中/右下等), text_match(匹配文本片段), name(形状名称子串), index(1-based形状序号)
+  target 可含: type(title/subtitle/body/table/picture), position(左上/中中/右下等), text_match(匹配文本片段)
 
 - modify_font: 修改字体样式
   {action:"modify_font", slide:1, target:{...}, params:{font_size:24, bold:true, italic:false, underline:false, strikethrough:false, color:255, font_name:"微软雅黑", font_size_factor:1.5}}
@@ -116,11 +128,8 @@ RGB转BGR公式: BGR = R + G*256 + B*65536
 2. slide 是 1-based 页码
 3. target 用于定位已有形状; 不需要 target 时可省略
 4. target.position 是形状的【当前位置】，用于定位形状，不是移动/缩放的目标位置。移动目标放在 params.left / params.top。例如"把标题移到左上"→ target:{type:"title"}, params:{left:0, top:0}
-5. target.name 按形状名称子串匹配（不区分大小写）；target.index 按 Shapes 集合中的序号（1-based）精确匹配。适用于密集页面中 type+position 无法区分时。
-   例: {action:"modify_text", slide:1, target:{name:"TextBox 3"}, params:{new_text:"新内容"}}
-   例: {action:"modify_font", slide:2, target:{index:5}, params:{bold:true}}
-6. 若指令模糊且你无法确定，输出 {"clarify": "你的问题"} (单个对象，非数组)
-7. 一条指令可能需要多个操作，全部放入数组
+5. 若指令模糊且你无法确定，输出 {"clarify": "你的问题"} (单个对象，非数组)
+6. 一条指令可能需要多个操作，全部放入数组
 """
 
 
@@ -455,6 +464,8 @@ def main():
     parser.add_argument("--inspect", action="store_true", help="查看 PPTX 结构")
     parser.add_argument("--output", "-o", help="输出文件路径")
     parser.add_argument("--dry-run", action="store_true", help="仅解析意图，不执行")
+    parser.add_argument("--exec-script", metavar="SCRIPT", help="执行Python脚本文件 (脚本内可用 ppt, filepath 变量, 无需API)")
+    parser.add_argument("--exec-actions", metavar="JSON", help="执行JSON动作数组 (字符串或.json文件路径, 无需API)")
     parser.add_argument("--api-base", help="API 端点")
     parser.add_argument("--model", help="模型名称")
     parser.add_argument("--api-key", help="API 密钥")
@@ -474,6 +485,61 @@ def main():
             structure = ppt.inspect()
             ppt.print_structure(structure)
             print("\n" + json.dumps(structure, ensure_ascii=False, indent=2))
+        finally:
+            ppt.close()
+        if not args.exec_script and not args.exec_actions:
+            return
+
+    if args.exec_script:
+        from pptx_editor_com import PowerPointCOM
+        ppt = PowerPointCOM()
+        try:
+            ppt.open(args.pptx_file)
+            if args.inspect and not args.exec_actions:
+                pass  # already printed above
+            script_path = args.exec_script
+            if not os.path.exists(script_path):
+                print(f"❌ 脚本文件不存在: {script_path}")
+                sys.exit(1)
+            print(f"🔧 执行脚本: {script_path}")
+            with open(script_path, "r", encoding="utf-8") as f:
+                script_code = f.read()
+            exec(script_code, {"ppt": ppt, "filepath": os.path.abspath(args.pptx_file),
+                               "__builtins__": __builtins__})
+            ppt.save(args.output)
+            print("✅ 脚本执行完成")
+        except Exception as e:
+            print(f"❌ 脚本执行失败: {e}")
+            import traceback; traceback.print_exc()
+            sys.exit(1)
+        finally:
+            ppt.close()
+        return
+
+    if args.exec_actions:
+        from pptx_editor_com import PowerPointCOM
+        raw = args.exec_actions
+        # Try as file path first
+        if os.path.exists(raw):
+            with open(raw, "r", encoding="utf-8") as f:
+                raw = f.read()
+        try:
+            actions = json.loads(raw)
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON 解析失败: {e}")
+            sys.exit(1)
+        ppt = PowerPointCOM()
+        try:
+            ppt.open(args.pptx_file)
+            if args.inspect:
+                pass  # already printed above
+            execute_actions(ppt, actions, dry_run=args.dry_run)
+            if not args.dry_run:
+                ppt.save(args.output)
+        except Exception as e:
+            print(f"❌ 动作执行失败: {e}")
+            import traceback; traceback.print_exc()
+            sys.exit(1)
         finally:
             ppt.close()
         return
