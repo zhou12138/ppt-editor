@@ -7,22 +7,33 @@ echo   PPT Editor - Windows Test Demo
 echo ============================================
 echo.
 
-python --version >nul 2>&1
-if errorlevel 1 echo [FAIL] Python not found. & pause & exit /b 1
+python --version >nul 2>nul
+if errorlevel 1 (
+    echo [FAIL] Python not found.
+    pause
+    exit /b 1
+)
 
-python -c "import pptx" >nul 2>&1
+python -c "import pptx" >nul 2>nul
 if errorlevel 1 pip install python-pptx
 
-python -c "import win32com.client" >nul 2>&1
-if errorlevel 1 echo [FAIL] pywin32 not found. Run: pip install pywin32 & pause & exit /b 1
+python -c "import win32com.client" >nul 2>nul
+if errorlevel 1 (
+    echo [FAIL] pywin32 not found. Run: pip install pywin32
+    pause
+    exit /b 1
+)
 
 echo.
 echo === Step 1: Generate test PPTX ===
 python gen_test.py
-if errorlevel 1 echo [FAIL] gen_test.py failed & pause & exit /b 1
+if errorlevel 1 (
+    echo [FAIL] gen_test.py failed
+    pause
+    exit /b 1
+)
 echo [OK] test_report.pptx generated
 echo.
-
 echo === Step 2: COM Inspect ===
 python pptx_editor_com.py test_report.pptx --inspect
 echo.
