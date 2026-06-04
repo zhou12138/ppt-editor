@@ -19,8 +19,8 @@ passed = 0
 failed = 0
 errors = []
 current_slide = [0]  # mutable for closure
-slide_comment_idx = {}  # {slide_num: next_y_offset}
-ppt_ref = [None]  # ref to PowerPointCOM for comment writing
+slide_notes = {}  # {slide_num: [lines]}
+ppt_ref = [None]  # ref to PowerPointCOM for notes writing
 
 def test(name, fn):
     global passed, failed
@@ -34,28 +34,27 @@ def test(name, fn):
             msg += f" ({result})"
             detail = result
         print(msg)
-        # Write comment immediately
-        _write_comment(name, "✅", detail)
+        _write_note(name, "✅", detail)
         if DELAY > 0:
             time.sleep(DELAY)
     except Exception as e:
         failed += 1
         errors.append((name, str(e)))
         print(f"FAIL: {e}")
-        _write_comment(name, "❌", str(e)[:60])
+        _write_note(name, "❌", str(e)[:60])
 
-def _write_comment(name, status, detail):
+def _write_note(name, status, detail):
     sn = current_slide[0]
     p = ppt_ref[0]
     if sn <= 0 or p is None:
         return
-    text = f"{status} {name}"
+    line = f"{status} {name}"
     if detail:
-        text += f" → {detail}"
-    y = slide_comment_idx.get(sn, 10)
+        line += f" → {detail}"
+    slide_notes.setdefault(sn, []).append(line)
     try:
-        p.add_comment(sn, text, "DemoTest", 10, y)
-        slide_comment_idx[sn] = y + 25
+        text = "\n".join(slide_notes[sn])
+        p.set_notes(sn, text)
     except:
         pass
 
@@ -81,6 +80,20 @@ def main():
             if headed:
                 try: p.app.ActiveWindow.View.GotoSlide(n)
                 except: pass
+
+        def set_notes_view():
+            """Switch to Normal view with notes pane visible"""
+            if headed:
+                try:
+                    # ppViewNormal=9 shows slides + notes pane
+                    p.app.ActiveWindow.ViewType = 9
+                    # Expand notes pane by adjusting pane height
+                    # Panes(3) is the notes pane in Normal view
+                    p.app.ActiveWindow.Panes(3).Activate()
+                except:
+                    pass
+
+        set_notes_view()
 
         def title(n):
             return p.find_shape(n, {"type": "title"})[0]
