@@ -337,6 +337,490 @@ class PowerPointCOM:
         self.prs.Slides(slide_idx).Export(os.path.abspath(out), "PNG", w, h)
         return f"第{slide_idx}页导出: {out}"
 
+    # ================================================================
+    # ================ NEW METHODS BELOW THIS LINE ===================
+    # ================================================================
+
+    # ---- Table: add_table ----
+    def add_table(self, slide_idx, rows, cols, left=100, top=100, width=400, height=200):
+        """Add a table to a slide. Returns the table shape."""
+        slide = self.prs.Slides(slide_idx)
+        shape = slide.Shapes.AddTable(rows, cols, left, top, width, height)
+        return f"Added {rows}x{cols} table on slide {slide_idx}"
+
+    # ---- Duplicate slide ----
+    def duplicate_slide(self, slide_idx):
+        """Duplicate a slide (inserts copy right after the original)."""
+        self.prs.Slides(slide_idx).Duplicate()
+        return f"Duplicated slide {slide_idx}"
+
+    # ---- Slide size ----
+    def set_slide_size(self, width, height):
+        """Set custom slide size in points."""
+        self.prs.PageSetup.SlideWidth = width
+        self.prs.PageSetup.SlideHeight = height
+        return f"Slide size set to {width}x{height}"
+
+    def set_slide_size_preset(self, preset):
+        """Set slide size preset. ppSlideSizeOnScreen=0, ppSlideSizeLetterPaper=1,
+        ppSlideSizeA4Paper=3, ppSlideSize35MM=4, ppSlideSizeOverhead=5,
+        ppSlideSizeBanner=6, ppSlideSizeCustom=7, ppSlideSizeOnScreen16x9=8"""
+        preset_map = {"widescreen": 8, "standard": 0, "a4": 3, "letter": 1, "banner": 6}
+        val = preset_map.get(preset, preset) if isinstance(preset, str) else preset
+        self.prs.PageSetup.SlideSize = val
+        return f"Slide size preset set to {preset}"
+
+    # ---- Background ----
+    def set_slide_background(self, slide_idx, color_bgr):
+        """Set slide background to a solid color (BGR)."""
+        slide = self.prs.Slides(slide_idx)
+        slide.FollowMasterBackground = False
+        slide.Background.Fill.Solid()
+        slide.Background.Fill.ForeColor.RGB = color_bgr
+        return f"Slide {slide_idx} background set to {hex(color_bgr)}"
+
+    def set_slide_background_image(self, slide_idx, image_path):
+        """Set slide background to an image."""
+        slide = self.prs.Slides(slide_idx)
+        slide.FollowMasterBackground = False
+        slide.Background.Fill.UserPicture(os.path.abspath(image_path))
+        return f"Slide {slide_idx} background set to {image_path}"
+
+    # ---- Notes ----
+    def get_notes(self, slide_idx):
+        """Get speaker notes text for a slide."""
+        slide = self.prs.Slides(slide_idx)
+        try:
+            return slide.NotesPage.Shapes.Placeholders(2).TextFrame.TextRange.Text
+        except Exception:
+            return ""
+
+    def set_notes(self, slide_idx, text):
+        """Set speaker notes text for a slide."""
+        slide = self.prs.Slides(slide_idx)
+        slide.NotesPage.Shapes.Placeholders(2).TextFrame.TextRange.Text = text
+        return f"Notes set on slide {slide_idx}"
+
+    # ---- Comments ----
+    def add_comment(self, slide_idx, text, author="Author", x=10, y=10):
+        """Add a comment to a slide."""
+        slide = self.prs.Slides(slide_idx)
+        slide.Comments.Add(x, y, author, "", text)
+        return f"Comment added on slide {slide_idx} by {author}"
+
+    def get_comments(self, slide_idx):
+        """Get all comments on a slide."""
+        slide = self.prs.Slides(slide_idx)
+        result = []
+        for i in range(1, slide.Comments.Count + 1):
+            c = slide.Comments(i)
+            result.append({"author": c.Author, "text": c.Text, "x": c.Left, "y": c.Top})
+        return result
+
+    def delete_comment(self, slide_idx, comment_idx):
+        """Delete a comment by index (1-based)."""
+        slide = self.prs.Slides(slide_idx)
+        slide.Comments(comment_idx).Delete()
+        return f"Deleted comment {comment_idx} on slide {slide_idx}"
+
+    # ---- Sections ----
+    def add_section(self, name, slide_idx):
+        """Add a section starting at slide_idx."""
+        self.prs.SectionProperties.AddSection(slide_idx, name)
+        return f"Section '{name}' added at slide {slide_idx}"
+
+    def delete_section(self, section_idx):
+        """Delete a section (1-based). Does not delete slides."""
+        self.prs.SectionProperties.Delete(section_idx, False)
+        return f"Section {section_idx} deleted"
+
+    def rename_section(self, section_idx, new_name):
+        """Rename a section."""
+        self.prs.SectionProperties.Rename(section_idx, new_name)
+        return f"Section {section_idx} renamed to '{new_name}'"
+
+    def get_sections(self):
+        """Get all sections."""
+        sp = self.prs.SectionProperties
+        result = []
+        for i in range(1, sp.Count + 1):
+            result.append({"index": i, "name": sp.Name(i),
+                           "first_slide": sp.FirstSlide(i),
+                           "slide_count": sp.SlidesCount(i)})
+        return result
+
+    # ---- Advanced shape operations ----
+    def rotate_shape(self, shape, angle):
+        """Rotate shape by angle degrees."""
+        shape.Rotation = angle
+        return f"Rotated [{shape.Name}] to {angle} degrees"
+
+    def flip_shape(self, shape, direction):
+        """Flip shape. direction: 'horizontal' (msoFlipHorizontal=0) or 'vertical' (msoFlipVertical=1)."""
+        flip_map = {"horizontal": 0, "vertical": 1}
+        val = flip_map.get(direction, direction) if isinstance(direction, str) else direction
+        shape.Flip(val)
+        return f"Flipped [{shape.Name}] {direction}"
+
+    def set_zorder(self, shape, position):
+        """Set z-order. position: 'front'=0(msoBringToFront), 'back'=1(msoSendToBack),
+        'forward'=2(msoBringForward), 'backward'=3(msoSendBackward)."""
+        zmap = {"front": 0, "back": 1, "forward": 2, "backward": 3}
+        val = zmap.get(position, position) if isinstance(position, str) else position
+        shape.ZOrder(val)
+        return f"Z-order [{shape.Name}] -> {position}"
+
+    def group_shapes(self, slide_idx, shape_names):
+        """Group shapes by name on a slide. Returns the grouped shape."""
+        slide = self.prs.Slides(slide_idx)
+        sr = slide.Shapes.Range(shape_names)
+        grp = sr.Group()
+        return f"Grouped {shape_names} on slide {slide_idx}"
+
+    def ungroup_shapes(self, shape):
+        """Ungroup a grouped shape."""
+        name = shape.Name
+        shape.Ungroup()
+        return f"Ungrouped [{name}]"
+
+    def add_connector(self, slide_idx, shape1, shape2, connector_type=1):
+        """Add a connector between two shapes.
+        connector_type: msoConnectorStraight=1, msoConnectorElbow=2, msoConnectorCurve=3."""
+        slide = self.prs.Slides(slide_idx)
+        conn = slide.Shapes.AddConnector(connector_type, 0, 0, 100, 100)
+        conn.ConnectorFormat.BeginConnect(shape1, 1)
+        conn.ConnectorFormat.EndConnect(shape2, 1)
+        conn.RerouteConnections()
+        return f"Connector added between [{shape1.Name}] and [{shape2.Name}]"
+
+    def add_freeform(self, slide_idx, points):
+        """Add a freeform shape from a list of (x, y) points."""
+        slide = self.prs.Slides(slide_idx)
+        if len(points) < 2:
+            return "Need at least 2 points"
+        builder = slide.Shapes.BuildFreeform(0, points[0][0], points[0][1])  # msoEditingAuto=0
+        for x, y in points[1:]:
+            builder.AddNodes(0, 0, x, y)  # msoSegmentLine=0, msoEditingAuto=0
+        shape = builder.ConvertToShape()
+        return f"Freeform added on slide {slide_idx} with {len(points)} points"
+
+    # ---- Advanced picture operations ----
+    def crop_picture(self, shape, left=0, top=0, right=0, bottom=0):
+        """Crop a picture shape. Values are proportions (0.0-1.0)."""
+        pf = shape.PictureFormat
+        pf.CropLeft = left
+        pf.CropTop = top
+        pf.CropRight = right
+        pf.CropBottom = bottom
+        return f"Cropped [{shape.Name}] L={left} T={top} R={right} B={bottom}"
+
+    def set_brightness(self, shape, val):
+        """Set picture brightness (-1.0 to 1.0)."""
+        shape.PictureFormat.Brightness = val
+        return f"Brightness [{shape.Name}] -> {val}"
+
+    def set_contrast(self, shape, val):
+        """Set picture contrast (-1.0 to 1.0)."""
+        shape.PictureFormat.Contrast = val
+        return f"Contrast [{shape.Name}] -> {val}"
+
+    def replace_picture(self, shape, new_path):
+        """Replace picture by deleting and re-inserting at same position/size."""
+        slide_idx = shape.Parent.SlideIndex
+        left, top, w, h = shape.Left, shape.Top, shape.Width, shape.Height
+        shape.Delete()
+        slide = self.prs.Slides(slide_idx)
+        slide.Shapes.AddPicture(os.path.abspath(new_path), False, True, left, top, w, h)
+        return f"Replaced picture on slide {slide_idx}"
+
+    # ---- Advanced text operations ----
+    def add_bullet(self, shape, level=1):
+        """Set bullet indent level (0-based) on last paragraph."""
+        cnt = shape.TextFrame.TextRange.Paragraphs().Count
+        shape.TextFrame.TextRange.Paragraphs(cnt).IndentLevel = level
+        return f"Bullet level {level} set on [{shape.Name}]"
+
+    def set_text_autofit(self, shape, mode):
+        """Set text autofit. mode: 'none'=0(ppAutoSizeNone), 'fit'=1(ppAutoSizeShapeToFitText),
+        'shrink'=2(ppAutoSizeMixed)."""
+        mode_map = {"none": 0, "fit": 1, "shrink": 2}
+        val = mode_map.get(mode, mode) if isinstance(mode, str) else mode
+        shape.TextFrame.AutoSize = val
+        return f"Text autofit [{shape.Name}] -> {mode}"
+
+    def add_hyperlink(self, shape, url, text=None):
+        """Add a hyperlink to a shape's text."""
+        tr = shape.TextFrame.TextRange
+        if text:
+            tr.Text = text
+        tr.ActionSettings(1).Hyperlink.Address = url  # ppMouseClick=1
+        return f"Hyperlink added to [{shape.Name}]: {url}"
+
+    def set_word_art(self, shape, style):
+        """Set WordArt style on shape text. style is an integer (msoTextEffect constants 0-49)."""
+        shape.TextFrame.TextRange.Font.WordArt = True
+        try:
+            shape.TextEffect.PresetTextEffect = style
+        except Exception:
+            pass
+        return f"WordArt style {style} set on [{shape.Name}]"
+
+    def set_line_spacing(self, shape, spacing):
+        """Set line spacing for all paragraphs (in points)."""
+        for pi in range(1, shape.TextFrame.TextRange.Paragraphs().Count + 1):
+            shape.TextFrame.TextRange.Paragraphs(pi).ParagraphFormat.SpaceWithin = spacing
+        return f"Line spacing [{shape.Name}] -> {spacing}"
+
+    def set_paragraph_spacing(self, shape, before=0, after=0):
+        """Set paragraph spacing before/after (in points)."""
+        for pi in range(1, shape.TextFrame.TextRange.Paragraphs().Count + 1):
+            pf = shape.TextFrame.TextRange.Paragraphs(pi).ParagraphFormat
+            pf.SpaceBefore = before
+            pf.SpaceAfter = after
+        return f"Paragraph spacing [{shape.Name}] before={before} after={after}"
+
+    # ---- Audio/Video ----
+    def add_audio(self, slide_idx, audio_path, left=100, top=100, width=50, height=50):
+        """Insert an audio file on a slide."""
+        slide = self.prs.Slides(slide_idx)
+        abs_path = os.path.abspath(audio_path)
+        shape = slide.Shapes.AddMediaObject2(abs_path, False, True, left, top, width, height)
+        return f"Audio added on slide {slide_idx}: {audio_path}"
+
+    def add_video(self, slide_idx, video_path, left=100, top=100, width=400, height=300):
+        """Insert a video file on a slide."""
+        slide = self.prs.Slides(slide_idx)
+        abs_path = os.path.abspath(video_path)
+        shape = slide.Shapes.AddMediaObject2(abs_path, False, True, left, top, width, height)
+        return f"Video added on slide {slide_idx}: {video_path}"
+
+    def set_media_playback(self, shape, auto_play=False, loop=False, hide_on_stop=False):
+        """Set media playback options."""
+        anim = shape.AnimationSettings
+        anim.PlaySettings.PlayOnEntry = auto_play
+        anim.PlaySettings.LoopUntilStopped = loop
+        anim.PlaySettings.HideWhileNotPlaying = hide_on_stop
+        return f"Media playback [{shape.Name}] auto={auto_play} loop={loop} hide={hide_on_stop}"
+
+    # ---- Chart operations ----
+    def add_chart(self, slide_idx, chart_type=4, data=None, left=100, top=100, width=400, height=300):
+        """Add a chart. chart_type: xlColumnClustered=51, xlLine=4, xlPie=5, xlBarClustered=57, xl3DColumn=54.
+        data: dict with 'categories' (list) and 'series' (list of {name, values})."""
+        slide = self.prs.Slides(slide_idx)
+        # ppChartType maps differently; use AddChart2 for Office 2013+
+        try:
+            chart_shape = slide.Shapes.AddChart2(-1, chart_type, left, top, width, height)
+        except Exception:
+            chart_shape = slide.Shapes.AddChart(chart_type, left, top, width, height)
+        if data:
+            try:
+                chart = chart_shape.Chart
+                wb = chart.ChartData.Workbook
+                ws = wb.Worksheets(1)
+                cats = data.get("categories", [])
+                series_list = data.get("series", [])
+                for i, cat in enumerate(cats):
+                    ws.Cells(i + 2, 1).Value = cat
+                for si, s in enumerate(series_list):
+                    ws.Cells(1, si + 2).Value = s.get("name", f"Series{si+1}")
+                    for vi, v in enumerate(s.get("values", [])):
+                        ws.Cells(vi + 2, si + 2).Value = v
+                chart.ChartData.Activate()
+                wb.Close(True)
+            except Exception as ex:
+                pass  # chart data setting may fail in some COM configurations
+        return f"Chart added on slide {slide_idx} type={chart_type}"
+
+    def modify_chart_data(self, shape, series_idx, values):
+        """Modify chart series data. series_idx is 1-based."""
+        chart = shape.Chart
+        series = chart.SeriesCollection(series_idx)
+        series.Values = values
+        return f"Chart series {series_idx} data updated"
+
+    def set_chart_title(self, shape, title):
+        """Set chart title."""
+        chart = shape.Chart
+        chart.HasTitle = True
+        chart.ChartTitle.Text = title
+        return f"Chart title set to '{title}'"
+
+    def set_chart_style(self, shape, style_id):
+        """Set chart style (1-48)."""
+        shape.Chart.ChartStyle = style_id
+        return f"Chart style set to {style_id}"
+
+    # ---- SmartArt ----
+    def add_smartart(self, slide_idx, layout_id=None, left=100, top=100, width=400, height=300):
+        """Add SmartArt. layout_id should be a SmartArt layout ID string.
+        If None, uses the first available layout."""
+        slide = self.prs.Slides(slide_idx)
+        try:
+            smart_art_layouts = self.app.SmartArtLayouts
+            if layout_id is None:
+                layout = smart_art_layouts(1)
+            elif isinstance(layout_id, int):
+                layout = smart_art_layouts(layout_id)
+            else:
+                layout = smart_art_layouts(layout_id)
+            shape = slide.Shapes.AddSmartArt(layout, left, top, width, height)
+            return f"SmartArt added on slide {slide_idx}"
+        except Exception as ex:
+            return f"SmartArt failed: {ex}"
+
+    # ---- Master/Layout ----
+    def get_slide_masters(self):
+        """Get all slide masters."""
+        result = []
+        for i in range(1, self.prs.SlideMaster.CustomLayouts.Count + 1):
+            result.append({"index": i, "name": self.prs.SlideMaster.CustomLayouts(i).Name})
+        return result
+
+    def get_slide_layouts(self):
+        """Get all slide layouts from the first master."""
+        result = []
+        try:
+            layouts = self.prs.SlideMaster.CustomLayouts
+            for i in range(1, layouts.Count + 1):
+                result.append({"index": i, "name": layouts(i).Name})
+        except Exception:
+            # Fallback: try Designs
+            for di in range(1, self.prs.Designs.Count + 1):
+                d = self.prs.Designs(di)
+                for li in range(1, d.SlideMaster.CustomLayouts.Count + 1):
+                    result.append({"design": di, "index": li,
+                                   "name": d.SlideMaster.CustomLayouts(li).Name})
+        return result
+
+    def set_slide_layout(self, slide_idx, layout_name_or_idx):
+        """Set layout for a slide by name or index."""
+        slide = self.prs.Slides(slide_idx)
+        layouts = self.prs.SlideMaster.CustomLayouts
+        if isinstance(layout_name_or_idx, int):
+            slide.CustomLayout = layouts(layout_name_or_idx)
+        else:
+            for i in range(1, layouts.Count + 1):
+                if layouts(i).Name == layout_name_or_idx:
+                    slide.CustomLayout = layouts(i)
+                    break
+        return f"Slide {slide_idx} layout set to {layout_name_or_idx}"
+
+    def modify_master_element(self, master_idx, shape_name, **kw):
+        """Modify a shape on a slide master by name."""
+        master = self.prs.Designs(master_idx).SlideMaster
+        for shape in master.Shapes:
+            if shape.Name == shape_name:
+                if "text" in kw and shape.HasTextFrame:
+                    shape.TextFrame.TextRange.Text = kw["text"]
+                if "font_size" in kw and shape.HasTextFrame:
+                    shape.TextFrame.TextRange.Font.Size = kw["font_size"]
+                return f"Master element '{shape_name}' modified"
+        return f"Shape '{shape_name}' not found on master {master_idx}"
+
+    # ---- Theme ----
+    def apply_theme(self, theme_path):
+        """Apply a theme (.thmx) file to the presentation."""
+        self.prs.ApplyTheme(os.path.abspath(theme_path))
+        return f"Theme applied: {theme_path}"
+
+    def get_theme_colors(self):
+        """Get theme color scheme info."""
+        try:
+            tc = self.prs.SlideMaster.Theme.ThemeColorScheme
+            result = []
+            for i in range(1, tc.Count + 1):
+                result.append({"index": i, "rgb": tc(i).RGB})
+            return result
+        except Exception as ex:
+            return f"Could not get theme colors: {ex}"
+
+    def set_theme_colors(self, color_scheme):
+        """Set theme colors. color_scheme is a dict of {index: rgb_bgr_value}."""
+        tc = self.prs.SlideMaster.Theme.ThemeColorScheme
+        for idx, rgb in color_scheme.items():
+            tc(int(idx)).RGB = rgb
+        return f"Theme colors updated"
+
+    # ---- 3D / Visual effects ----
+    def set_shadow(self, shape, preset):
+        """Set shadow preset (0-20+). 0 = no shadow."""
+        shape.Shadow.Type = 1 if preset > 0 else 0  # msoShadow1
+        if preset > 0:
+            try:
+                shape.Shadow.Style = preset
+            except Exception:
+                shape.Shadow.Visible = True
+        else:
+            shape.Shadow.Visible = False
+        return f"Shadow preset {preset} set on [{shape.Name}]"
+
+    def set_reflection(self, shape, preset):
+        """Set reflection preset."""
+        try:
+            shape.Reflection.Type = preset
+        except Exception:
+            return f"Reflection not supported on [{shape.Name}]"
+        return f"Reflection preset {preset} set on [{shape.Name}]"
+
+    def set_glow(self, shape, color_bgr, radius=10):
+        """Set glow effect."""
+        try:
+            shape.Glow.Color.RGB = color_bgr
+            shape.Glow.Radius = radius
+        except Exception:
+            return f"Glow not supported on [{shape.Name}]"
+        return f"Glow set on [{shape.Name}] color={hex(color_bgr)} radius={radius}"
+
+    def set_3d_rotation(self, shape, x=0, y=0, z=0):
+        """Set 3D rotation on shape."""
+        try:
+            shape.ThreeD.RotationX = x
+            shape.ThreeD.RotationY = y
+            shape.ThreeD.RotationZ = z
+        except Exception:
+            return f"3D rotation not supported on [{shape.Name}]"
+        return f"3D rotation [{shape.Name}] x={x} y={y} z={z}"
+
+    # ---- Print ----
+    def print_presentation(self, printer_name=None, copies=1, print_range=None):
+        """Print the presentation."""
+        if printer_name:
+            self.app.ActivePrinter = printer_name
+        if print_range:
+            self.prs.PrintOptions.RangeType = 4  # ppPrintSlideRange
+            self.prs.PrintOptions.Ranges.Add(print_range[0], print_range[1])
+        self.prs.PrintOut(Copies=copies)
+        return f"Printed {copies} copies"
+
+    # ---- SlideShow ----
+    def start_slideshow(self, from_slide=1, to_slide=None):
+        """Start a slideshow."""
+        ss = self.prs.SlideShowSettings
+        ss.StartingSlide = from_slide
+        if to_slide:
+            ss.EndingSlide = to_slide
+        ss.Run()
+        return f"Slideshow started from slide {from_slide}"
+
+    def set_slideshow_settings(self, loop=False, show_narration=True, show_animation=True):
+        """Configure slideshow settings."""
+        ss = self.prs.SlideShowSettings
+        ss.LoopUntilStopped = loop
+        ss.ShowWithNarration = show_narration
+        ss.ShowWithAnimation = show_animation
+        return f"Slideshow settings: loop={loop} narration={show_narration} animation={show_animation}"
+
+    # ---- Merge presentations ----
+    def merge_presentations(self, file_paths, output_path=None):
+        """Merge slides from multiple presentations into the current one."""
+        for fp in file_paths:
+            abs_fp = os.path.abspath(fp)
+            idx = self.prs.Slides.Count
+            self.prs.Slides.InsertFromFile(abs_fp, idx)
+        if output_path:
+            self.prs.SaveAs(os.path.abspath(output_path))
+        return f"Merged {len(file_paths)} presentations"
+
 
 # ========== 意图解析 ==========
 def parse_intent(instruction):
