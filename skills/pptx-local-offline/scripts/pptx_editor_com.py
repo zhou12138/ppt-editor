@@ -66,12 +66,6 @@ class PowerPointCOM:
             pass
 
         try:
-            shape.PictureFormat
-            info["has_image"] = True
-        except Exception:
-            pass
-
-        try:
             contained_type = shape.PlaceholderFormat.ContainedType
             if contained_type == 13:
                 info["has_image"] = True
