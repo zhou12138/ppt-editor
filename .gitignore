@@ -5,3 +5,6 @@ __pycache__/
 *.pptx
 !sample.pptx
 !skills/**/*.pptx
+
+# 测试/输出临时目录
+opt/
