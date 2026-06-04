@@ -53,6 +53,7 @@ python pptx_editor_llm.py deck.pptx --interactive
 python pptx_editor_llm.py deck.pptx --exec-script edit.py
 python pptx_editor_llm.py deck.pptx --exec-script edit.py --headed
 python pptx_editor_llm.py deck.pptx --exec-script edit.py --notes-progress --note-slide 1
+python pptx_editor_llm.py deck.pptx --interactive-script --headed
 python pptx_editor_llm.py deck.pptx --exec-script edit.py --output out.pptx
 python pptx_editor_llm.py deck.pptx --inspect --exec-script edit.py
 ```
@@ -69,6 +70,18 @@ sleep(1.5, slide=1, note="标题已加粗并改为红色")
 ppt.add_animation(1, shapes[0], "fade")
 ```
 
+脚本会话模式会保持同一个 COM 会话，持续从 stdin 读取命令。支持：
+- `help`
+- `inspect`
+- `status`
+- `save`
+- `saveas out.pptx`
+- `quit`
+- `close`
+- 直接输入脚本路径
+- `{"command":"script","path":"edit.py"}`
+- `{"command":"script_inline","code":"ppt.set_notes(1, 'hello')"}`
+
 ### 模式 C：本地 AI Agent JSON 动作执行 `--exec-actions`
 
 Claude 等 AI Agent 生成 JSON actions 数组，跳过 LLM 解析直接 dispatch 执行。接受 JSON 字符串或 .json 文件路径。**无需任何 API Key，无需 Ollama。**
@@ -76,6 +89,7 @@ Claude 等 AI Agent 生成 JSON actions 数组，跳过 LLM 解析直接 dispatc
 ```bash
 python pptx_editor_llm.py deck.pptx --exec-actions '[{"action":"modify_font","slide":1,"target":{"type":"title"},"params":{"bold":true}}]'
 python pptx_editor_llm.py deck.pptx --exec-actions actions.json
+python pptx_editor_llm.py deck.pptx --interactive-actions --headed
 python pptx_editor_llm.py deck.pptx --exec-actions actions.json --headed --notes-progress
 python pptx_editor_llm.py deck.pptx --exec-actions actions.json --dry-run
 ```
@@ -89,6 +103,26 @@ JSON actions 也支持等待动作：
     {"action": "animation", "slide": 1, "target": {"type": "title"}, "params": {"effect": "fade"}}
 ]
 ```
+
+JSON 会话模式会保持同一个 COM 会话，持续从 stdin 读取命令。推荐使用 JSON command envelope：
+
+```json
+{"command":"actions","payload":[{"action":"set_slide_background_image","slide":1,"params":{"image_path":"bg.png"}}]}
+{"command":"inspect"}
+{"command":"save"}
+{"command":"quit"}
+```
+
+也支持直接输入 JSON actions 数组或单个 action 对象，以及以下简命令：
+- `help`
+- `inspect`
+- `status`
+- `save`
+- `saveas out.pptx`
+- `quit`
+- `close`
+
+完整示例见 [interactive-session-guide.md](./references/interactive-session-guide.md)。
 
 ### 模式选择指南
 
@@ -110,6 +144,8 @@ JSON actions 也支持等待动作：
 | `--api-base` | 覆盖 API 端点 | A |
 | `--model` | 覆盖模型名 | A |
 | `--api-key` | 覆盖 API 密钥 | A |
+| `--interactive-actions [JSON]` | 在同一 COM 会话中持续执行 JSON 命令 | C |
+| `--interactive-script [SCRIPT]` | 在同一 COM 会话中持续执行脚本命令 | B |
 | `--headed` | 以可见窗口模式打开 PowerPoint | 全部 |
 | `--notes-progress` | 自动把当前指令或脚本进度写到演讲者备注 | A, B, C |
 | `--note-slide` | 将进度备注固定写到指定页 | A, B, C |

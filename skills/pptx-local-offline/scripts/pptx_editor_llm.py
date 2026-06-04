@@ -82,6 +82,258 @@ def _close_after_grace(ppt, modified=False):
         time.sleep(CLOSE_DELAY_SECONDS)
     ppt.close()
 
+
+def _load_actions_input(raw):
+    """Load JSON actions from a raw string or file path."""
+    text = raw
+    if os.path.exists(raw):
+        with open(raw, "r", encoding="utf-8") as f:
+            text = f.read()
+    return json.loads(text)
+
+
+def _run_script_code(ppt, script_code, script_label, note_slide=None, notes_progress=False):
+    """Execute script code with the injected helper globals."""
+    log_note, sleep = _build_script_helpers(ppt, note_slide=note_slide)
+    if notes_progress:
+        _write_progress_note(
+            ppt,
+            f"开始执行脚本: {script_label}",
+            note_slide=note_slide,
+            append=False,
+        )
+    exec(script_code, {
+        "ppt": ppt,
+        "filepath": ppt.filepath,
+        "log_note": log_note,
+        "sleep": sleep,
+        "__builtins__": __builtins__,
+    })
+    if notes_progress:
+        _write_progress_note(
+            ppt,
+            f"脚本执行完成: {script_label}",
+            note_slide=note_slide,
+            append=True,
+        )
+
+
+def _run_script_path(ppt, script_path, note_slide=None, notes_progress=False):
+    """Execute a script file by path."""
+    if not os.path.exists(script_path):
+        raise FileNotFoundError(f"脚本文件不存在: {script_path}")
+    with open(script_path, "r", encoding="utf-8") as f:
+        script_code = f.read()
+    _run_script_code(
+        ppt,
+        script_code,
+        os.path.basename(script_path),
+        note_slide=note_slide,
+        notes_progress=notes_progress,
+    )
+
+
+def _print_session_help(mode):
+    """Print available commands for interactive action/script sessions."""
+    print("\n💡 会话命令:")
+    print("  inspect                 查看当前结构")
+    print("  status                  查看当前会话状态")
+    print("  save                    保存当前文件")
+    print("  saveas <path>           另存为指定文件")
+    print("  quit                    保存并退出")
+    print("  close                   直接关闭不再继续读取命令")
+    print("  help                    显示本帮助")
+    if mode == "actions":
+        print("  {\"command\":\"actions\",\"payload\":[...]}  执行 JSON actions")
+        print("  [...]/{...}             直接执行 JSON actions")
+    else:
+        print("  {\"command\":\"script\",\"path\":\"edit.py\"}        执行脚本文件")
+        print("  {\"command\":\"script_inline\",\"code\":\"...\"}  执行内联脚本")
+        print("  <script.py>             直接执行脚本文件")
+
+
+def _print_session_status(ppt, mode, output_path, modified):
+    """Print interactive session status."""
+    print(json.dumps({
+        "mode": mode,
+        "file": ppt.filepath,
+        "slides": ppt.prs.Slides.Count,
+        "output": output_path or ppt.filepath,
+        "modified": modified,
+    }, ensure_ascii=False, indent=2))
+
+
+def _parse_session_command(raw, mode):
+    """Parse a line of interactive session input."""
+    text = raw.strip()
+    if not text:
+        return None
+
+    lowered = text.lower()
+    if lowered in ("help", "inspect", "status", "save", "quit", "exit", "close"):
+        return {"command": lowered}
+    if lowered.startswith("saveas "):
+        return {"command": "saveas", "path": text[7:].strip()}
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        if mode == "script":
+            return {"command": "script", "path": text}
+        raise ValueError("无法解析输入。请提供 JSON 命令、脚本路径或 help。")
+
+    if isinstance(parsed, dict) and "command" in parsed:
+        return parsed
+
+    if mode == "actions":
+        if isinstance(parsed, list):
+            return {"command": "actions", "payload": parsed}
+        if isinstance(parsed, dict) and ("action" in parsed or "clarify" in parsed):
+            return {"command": "actions", "payload": parsed}
+
+    raise ValueError("输入格式不受支持。请使用 help 查看协议。")
+
+
+def _run_interactive_session(pptx_path, mode, initial_payload=None, output=None,
+                             dry_run=False, headed=False, notes_progress=False,
+                             note_slide=None):
+    """Keep one COM session open and execute commands from stdin."""
+    from pptx_editor_com import PowerPointCOM
+
+    ppt = PowerPointCOM(visible=headed)
+    modified = False
+    current_output = output
+
+    try:
+        ppt.open(pptx_path)
+        print(f"\n💬 {mode} 会话模式 (输入 help 查看命令, quit 保存退出)")
+
+        if initial_payload and initial_payload != "-":
+            if mode == "actions":
+                actions = _load_actions_input(initial_payload)
+                if notes_progress and not dry_run:
+                    _write_progress_note(
+                        ppt,
+                        f"开始执行动作集: {len(actions) if isinstance(actions, list) else 1} 个动作",
+                        note_slide=note_slide,
+                        append=False,
+                    )
+                execute_actions(ppt, actions, dry_run=dry_run)
+                if not dry_run:
+                    modified = True
+            else:
+                _run_script_path(ppt, initial_payload, note_slide=note_slide, notes_progress=notes_progress)
+                modified = True
+
+        while True:
+            try:
+                raw = input(f"\n{mode}> ")
+            except EOFError:
+                raw = "quit"
+            except KeyboardInterrupt:
+                raw = "quit"
+                print()
+
+            try:
+                command = _parse_session_command(raw, mode)
+            except Exception as e:
+                print(f"❌ {e}")
+                continue
+
+            if command is None:
+                continue
+
+            cmd = command.get("command", "").lower()
+
+            if cmd == "help":
+                _print_session_help(mode)
+                continue
+            if cmd == "inspect":
+                structure = ppt.inspect()
+                ppt.print_structure(structure)
+                continue
+            if cmd == "status":
+                _print_session_status(ppt, mode, current_output, modified)
+                continue
+            if cmd == "save":
+                if dry_run:
+                    print("🔍 Dry-run 模式，未保存")
+                else:
+                    ppt.save(current_output)
+                    print("✅ 已保存")
+                continue
+            if cmd == "saveas":
+                saveas_path = command.get("path")
+                if not saveas_path:
+                    print("❌ saveas 需要 path")
+                    continue
+                if dry_run:
+                    print(f"🔍 Dry-run 模式，未另存为: {saveas_path}")
+                else:
+                    current_output = saveas_path
+                    ppt.save(current_output)
+                    print(f"✅ 已另存为: {current_output}")
+                continue
+            if cmd in ("quit", "exit"):
+                if not dry_run:
+                    ppt.save(current_output)
+                break
+            if cmd == "close":
+                modified = False
+                break
+
+            try:
+                if mode == "actions" and cmd == "actions":
+                    payload = command.get("payload")
+                    if notes_progress and not dry_run:
+                        count = len(payload) if isinstance(payload, list) else 1
+                        _write_progress_note(
+                            ppt,
+                            f"开始执行动作集: {count} 个动作",
+                            note_slide=note_slide,
+                            append=False,
+                        )
+                    execute_actions(ppt, payload, dry_run=dry_run)
+                    if notes_progress and not dry_run:
+                        count = len(payload) if isinstance(payload, list) else 1
+                        _write_progress_note(
+                            ppt,
+                            f"动作集执行完成: {count} 个动作",
+                            note_slide=note_slide,
+                            append=True,
+                        )
+                    if not dry_run:
+                        modified = True
+                    continue
+
+                if mode == "script" and cmd == "script":
+                    _run_script_path(
+                        ppt,
+                        command.get("path", ""),
+                        note_slide=note_slide,
+                        notes_progress=notes_progress,
+                    )
+                    modified = True
+                    continue
+
+                if mode == "script" and cmd == "script_inline":
+                    _run_script_code(
+                        ppt,
+                        command.get("code", ""),
+                        "<inline>",
+                        note_slide=note_slide,
+                        notes_progress=notes_progress,
+                    )
+                    modified = True
+                    continue
+
+                print("❌ 不支持的命令，输入 help 查看用法")
+            except Exception as e:
+                print(f"❌ 执行失败: {e}")
+
+    finally:
+        _close_after_grace(ppt, modified=modified and not dry_run)
+
 # ---------------------------------------------------------------------------
 # LLM 系统提示词
 # ---------------------------------------------------------------------------
@@ -764,6 +1016,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="仅解析意图，不执行")
     parser.add_argument("--exec-script", metavar="SCRIPT", help="执行Python脚本文件 (脚本内可用 ppt, filepath 变量, 无需API)")
     parser.add_argument("--exec-actions", metavar="JSON", help="执行JSON动作数组 (字符串或.json文件路径, 无需API)")
+    parser.add_argument("--interactive-actions", metavar="JSON", nargs="?", const="-", help="保持同一个 COM 会话，持续从 stdin 读取 JSON 动作命令")
+    parser.add_argument("--interactive-script", metavar="SCRIPT", nargs="?", const="-", help="保持同一个 COM 会话，持续从 stdin 读取脚本命令")
     parser.add_argument("--api-base", help="API 端点")
     parser.add_argument("--model", help="模型名称")
     parser.add_argument("--api-key", help="API 密钥")
@@ -790,6 +1044,32 @@ def main():
             _close_after_grace(ppt, modified=False)
         if not args.exec_script and not args.exec_actions:
             return
+
+    if args.interactive_actions is not None:
+        _run_interactive_session(
+            args.pptx_file,
+            "actions",
+            initial_payload=args.interactive_actions,
+            output=args.output,
+            dry_run=args.dry_run,
+            headed=args.headed,
+            notes_progress=args.notes_progress,
+            note_slide=args.note_slide,
+        )
+        return
+
+    if args.interactive_script is not None:
+        _run_interactive_session(
+            args.pptx_file,
+            "script",
+            initial_payload=args.interactive_script,
+            output=args.output,
+            dry_run=args.dry_run,
+            headed=args.headed,
+            notes_progress=args.notes_progress,
+            note_slide=args.note_slide,
+        )
+        return
 
     if args.exec_script:
         from pptx_editor_com import PowerPointCOM
