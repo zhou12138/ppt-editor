@@ -3,13 +3,19 @@ Option Explicit
 
 ' VBA bridge for the experimental --backend vba strategy.
 ' Import this module into a macro-enabled presentation/add-in.
-' Requires JsonConverter.bas (VBA-JSON) in the same VBA project.
+' Requires the bundled JsonConverter.bas in the same VBA project.
 
 Public Function Ping() As String
+    On Error GoTo ErrHandler
     Ping = "PptEditorBridge ready"
+    Exit Function
+
+ErrHandler:
+    Ping = BuildMacroErrorText("Ping", Err)
 End Function
 
 Public Function InspectPresentationJson() As String
+    On Error GoTo ErrHandler
     Dim prs As Presentation
     Dim result As Object
     Dim slidesArr As Collection
@@ -32,15 +38,20 @@ Public Function InspectPresentationJson() As String
             elementsArr.Add InspectShape(prs, shp)
         Next shp
 
-        slideObj("elements") = elementsArr
+        Set slideObj("elements") = elementsArr
         slidesArr.Add slideObj
     Next sld
 
-    result("slides") = slidesArr
+    Set result("slides") = slidesArr
     InspectPresentationJson = JsonConverter.ConvertToJson(result)
+    Exit Function
+
+ErrHandler:
+    InspectPresentationJson = BuildMacroErrorJson("InspectPresentationJson", Err)
 End Function
 
 Public Function ExecuteActionJson(ByVal actionJson As String) As String
+    On Error GoTo ErrHandler
     Dim actionObj As Object
     Dim actionName As String
 
@@ -86,6 +97,10 @@ Public Function ExecuteActionJson(ByVal actionJson As String) As String
             Err.Raise vbObjectError + 2049, "PptEditorBridge", _
                 "Unsupported action for VBA backend: " & actionName
     End Select
+    Exit Function
+
+ErrHandler:
+    ExecuteActionJson = BuildMacroErrorText("ExecuteActionJson", Err)
 End Function
 
 Private Function InspectShape(ByVal prs As Presentation, ByVal shp As Shape) As Object
@@ -770,13 +785,19 @@ Private Function PlaceholderTypeName(ByVal phType As Long) As String
 End Function
 
 Public Function SetNotes(ByVal slideIndex As Long, ByVal noteText As String) As String
+    On Error GoTo ErrHandler
     With ActivePresentation.Slides(slideIndex).NotesPage.Shapes.Placeholders(2).TextFrame.TextRange
         .Text = noteText
     End With
     SetNotes = "备注已更新"
+    Exit Function
+
+ErrHandler:
+    SetNotes = BuildMacroErrorText("SetNotes", Err)
 End Function
 
 Public Function AppendNotes(ByVal slideIndex As Long, ByVal noteText As String, Optional ByVal separator As String = vbCrLf) As String
+    On Error GoTo ErrHandler
     Dim currentText As String
     With ActivePresentation.Slides(slideIndex).NotesPage.Shapes.Placeholders(2).TextFrame.TextRange
         currentText = .Text
@@ -787,4 +808,41 @@ Public Function AppendNotes(ByVal slideIndex As Long, ByVal noteText As String, 
         End If
     End With
     AppendNotes = "备注已追加"
+    Exit Function
+
+ErrHandler:
+    AppendNotes = BuildMacroErrorText("AppendNotes", Err)
+End Function
+
+Private Function BuildMacroErrorJson(ByVal sourceName As String, ByVal errObj As ErrObject) As String
+    BuildMacroErrorJson = "{""error"":""" & EscapeJsonString(BuildMacroErrorMessage(sourceName, errObj)) & """}"
+End Function
+
+Private Function BuildMacroErrorText(ByVal sourceName As String, ByVal errObj As ErrObject) As String
+    BuildMacroErrorText = "__VBA_ERROR__:" & BuildMacroErrorMessage(sourceName, errObj)
+End Function
+
+Private Function BuildMacroErrorMessage(ByVal sourceName As String, ByVal errObj As ErrObject) As String
+    Dim parts As Collection
+    Set parts = New Collection
+
+    parts.Add sourceName
+    If Len(errObj.Source) > 0 Then parts.Add errObj.Source
+    If errObj.Number <> 0 Then parts.Add "#" & CStr(errObj.Number)
+    If Len(errObj.Description) > 0 Then
+        parts.Add errObj.Description
+    Else
+        parts.Add "Unknown VBA error"
+    End If
+
+    BuildMacroErrorMessage = JoinCollection(parts, " | ")
+End Function
+
+Private Function EscapeJsonString(ByVal value As String) As String
+    value = Replace(value, "\", "\\")
+    value = Replace(value, """", "\"")
+    value = Replace(value, vbCrLf, "\n")
+    value = Replace(value, vbCr, "\n")
+    value = Replace(value, vbLf, "\n")
+    EscapeJsonString = value
 End Function
