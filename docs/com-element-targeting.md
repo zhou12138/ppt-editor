@@ -283,12 +283,33 @@ p.print_structure(desc)
 ]
 ```
 
+### 3.4 按名称定位 (name)
+
+每个 Shape 都有 `.Name` 属性（如 "TextBox 3"、"Title 1"），可用于精确定位：
+
+```python
+target = {"name": "TextBox 3"}
+# shape.Name.lower() 包含 target["name"].lower() 即匹配
+```
+
+### 3.5 按索引定位 (index)
+
+Shapes 集合的遍历顺序是固定的（1-based），可直接用索引定位：
+
+```python
+target = {"index": 3}  # 第3个形状
+```
+
+适用于密集页面中 type + position 无法区分多个同类元素的场景。
+
 **定位策略优先级（LLM 应遵循）：**
 
 1. **Placeholder 类型** — 最可靠：`{"type": "title"}`, `{"type": "body"}`
 2. **文本匹配** — 内容已知时：`{"text_match": "营收数据"}`
 3. **位置区域** — 布局已知时：`{"position": "左上"}`
-4. **组合查询** — 多条件交叉：`{"type": "body", "position": "左中"}`
+4. **名称匹配** — 已知形状名时：`{"name": "TextBox 3"}`
+5. **索引定位** — 最后手段：`{"index": 3}`
+6. **组合查询** — 多条件交叉：`{"type": "body", "position": "左中", "name": "Content"}`
 
 ---
 

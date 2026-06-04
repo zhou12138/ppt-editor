@@ -147,12 +147,14 @@ namespace PptxEditorCom
             foreach (var s in desc)
             {
                 Console.WriteLine($"\n==================================================\n📄 第 {s["index"]} 页 ({s["layout"]})\n==================================================");
+                int elemIdx = 0;
                 foreach (var e in (List<Dictionary<string, object>>)s["elements"])
                 {
+                    elemIdx++;
                     string ph = (bool)e["is_placeholder"] && e.ContainsKey("ph_type_name") ? $" [{e["ph_type_name"]}]" : "";
                     string txt = (string)e["text"]; if (string.IsNullOrEmpty(txt)) txt = "(无)";
                     if (txt.Length > 40) txt = txt.Substring(0, 40); txt = txt.Replace("\n", "↵");
-                    Console.WriteLine($"  [{e["id"]}] {e["name"]}{ph} ({e["position_label"]}) → {txt}");
+                    Console.WriteLine($"  [{elemIdx}] [{e["id"]}] {e["name"]}{ph} ({e["position_label"]}) → {txt}");
                     if (e.ContainsKey("paragraphs")) { var ps = (List<Dictionary<string, object>>)e["paragraphs"]; if (ps.Count > 0) { var p0 = ps[0]; Console.WriteLine($"       字体:{V(p0,"font")} 字号:{V(p0,"size")} 粗:{V(p0,"bold")}"); } }
                     if (e.ContainsKey("table")) { var tbl = (List<List<string>>)e["table"]; Console.WriteLine($"       表格: {tbl.Count}×{(tbl.Count>0?tbl[0].Count:0)}"); }
                 }
@@ -162,10 +164,10 @@ namespace PptxEditorCom
 
         public List<PowerPoint.Shape> FindShape(int slideIdx, Dictionary<string, string> target)
         {
-            var slide = prs.Slides[slideIdx]; var hits = new List<PowerPoint.Shape>();
+            var slide = prs.Slides[slideIdx]; var hits = new List<PowerPoint.Shape>(); int shapeIndex = 0;
             foreach (PowerPoint.Shape shape in slide.Shapes)
             {
-                bool ok = true;
+                shapeIndex++; bool ok = true;
                 if (target.ContainsKey("type"))
                 {
                     string t = target["type"];
@@ -179,6 +181,8 @@ namespace PptxEditorCom
                 }
                 if (ok && target.ContainsKey("position")) { string pos = PosLabel(shape.Left, shape.Top, shape.Width, shape.Height); if (!pos.Contains(target["position"])) ok = false; }
                 if (ok && target.ContainsKey("text_match")) { try { if (shape.HasTextFrame != Office.MsoTriState.msoTrue || !shape.TextFrame.TextRange.Text.Contains(target["text_match"])) ok = false; } catch { ok = false; } }
+                if (ok && target.ContainsKey("name")) { try { if (!shape.Name.ToLower().Contains(target["name"].ToLower())) ok = false; } catch { ok = false; } }
+                if (ok && target.ContainsKey("index")) { if (shapeIndex != int.Parse(target["index"])) ok = false; }
                 if (ok) hits.Add(shape);
             }
             return hits;

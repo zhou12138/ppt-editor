@@ -319,7 +319,7 @@ pythoncom.CoUninitialize()  # 离开 STA
           │ [{action, slide, target, params}]
           ▼
    ┌─────────────┐
-   │ FindShape   │   三维定位: type × position × text
+   │ FindShape   │   五维定位: type × position × text × name × index
    └──────┬──────┘
           │ Shape 对象
           ▼

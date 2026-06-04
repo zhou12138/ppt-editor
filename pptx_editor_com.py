@@ -128,7 +128,8 @@ class PowerPointCOM:
             for e in s["elements"]:
                 ph = f" [{e.get('ph_type_name','')}]" if e.get("is_placeholder") else ""
                 txt = (e.get("text","") or "(无)")[:40].replace("\n","↵")
-                print(f"  [{e['id']}] {e['name']}{ph} ({e['position_label']}) → {txt}")
+                idx = s["elements"].index(e) + 1
+                print(f"  [{idx}] [{e['id']}] {e['name']}{ph} ({e['position_label']}) → {txt}")
                 if e.get("paragraphs"):
                     p = e["paragraphs"][0]
                     print(f"       字体:{p.get('font')} 字号:{p.get('size')} 粗:{p.get('bold')}")
@@ -139,7 +140,7 @@ class PowerPointCOM:
     def find_shape(self, slide_idx, target):
         slide = self.prs.Slides(slide_idx)
         hits = []
-        for shape in slide.Shapes:
+        for shape_index, shape in enumerate(slide.Shapes, 1):
             ok = True
             if "type" in target:
                 t = target["type"]
@@ -167,6 +168,14 @@ class PowerPointCOM:
                     if not shape.HasTextFrame or target["text_match"] not in shape.TextFrame.TextRange.Text:
                         ok = False
                 except: ok = False
+            if ok and "name" in target:
+                try:
+                    if target["name"].lower() not in shape.Name.lower():
+                        ok = False
+                except: ok = False
+            if ok and "index" in target:
+                if shape_index != target["index"]:
+                    ok = False
             if ok: hits.append(shape)
         return hits
 
@@ -851,6 +860,16 @@ def parse_intent(instruction):
         before = instruction[:qm.start()]
         if not re.search(r'(?:改|换|替换|变)[成为]?\s*$', before):
             target["text_match"] = qm.group(1); break
+
+    # 按名称定位
+    m = re.search(r'(?:name|名称)[：:]([^\s,，]+)', instruction)
+    if m: target["name"] = m.group(1)
+
+    # 按索引定位
+    m = re.search(r'#(\d+)', instruction)
+    if m: target["index"] = int(m.group(1))
+    m = re.search(r'第(\d+)个', instruction)
+    if m and "index" not in target: target["index"] = int(m.group(1))
 
     # ---- 幻灯片管理 (先匹配，避免被"删除"等通用规则吃掉) ----
 
