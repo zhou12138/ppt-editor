@@ -334,12 +334,32 @@ class PowerPointCOM:
         n = shape.Name; shape.Delete(); return f"删除 [{n}]"
 
     # ---- 文本框/图片 ----
-    def add_textbox(self, slide_idx, text, left=100, top=100, width=300, height=50):
+    def add_textbox(self, slide_idx, text, left=100, top=100, width=300, height=50,
+                    fill_color=None, font_size=None, font_color=None):
         """添加文本框 (msoTextOrientationHorizontal=1)"""
         slide = self.prs.Slides(slide_idx)
         shape = slide.Shapes.AddTextbox(1, left, top, width, height)
         shape.TextFrame.TextRange.Text = text
+        if fill_color is not None:
+            shape.Fill.Solid()
+            shape.Fill.ForeColor.RGB = fill_color
+        if font_size is not None:
+            shape.TextFrame.TextRange.Font.Size = font_size
+        if font_color is not None:
+            shape.TextFrame.TextRange.Font.Color.RGB = font_color
         return f"第{slide_idx}页添加文本框: '{text[:30]}'"
+
+    def add_shape(self, slide_idx, shape_type=1, left=100, top=100,
+                  width=300, height=200, fill_color=None, line_visible=True):
+        """添加基本形状 (shape_type: 1=矩形, 9=圆形, 20=线条等)"""
+        slide = self.prs.Slides(slide_idx)
+        shape = slide.Shapes.AddShape(shape_type, left, top, width, height)
+        if fill_color is not None:
+            shape.Fill.Solid()
+            shape.Fill.ForeColor.RGB = fill_color
+        if not line_visible:
+            shape.Line.Visible = False
+        return f"第{slide_idx}页添加形状: type={shape_type} at ({left},{top})"
 
     def add_picture(self, slide_idx, pic_path, left=100, top=100, width=200, height=150):
         """插入图片"""

@@ -30,6 +30,8 @@ PPTX 编辑器 — LLM 意图解析 + COM 执行 (Windows Only)
 
 import sys, os, json, argparse, requests
 
+from ppt_backend import add_backend_arguments, create_backend
+
 
 def _resolve_note_slide(ppt, slide=None, note_slide=None):
     """Choose which slide should receive progress notes."""
@@ -116,12 +118,15 @@ SYSTEM_PROMPT = r"""你是一个 PowerPoint 编辑助手。用户会给你一个
   {action:"resize_shape", slide:1, target:{...}, params:{width:400, height:300}}
   或用 scale_factor: {action:"resize_shape", slide:1, target:{...}, params:{scale_factor:1.5}}
 
-- delete: 删除形状
-  {action:"delete", slide:1, target:{...}, params:{}}
+- delete / delete_shape: 删除形状
+    {action:"delete", slide:1, target:{...}, params:{}}
 
 ### 添加元素
 - add_textbox: 添加文本框
-  {action:"add_textbox", slide:1, params:{text:"内容", left:100, top:100, width:300, height:50}}
+    {action:"add_textbox", slide:1, params:{text:"内容", left:100, top:100, width:300, height:50, fill_color:16777215, font_size:24, font_color:255}}
+
+- add_shape: 添加基本形状
+    {action:"add_shape", slide:1, params:{shape_type:1, left:100, top:100, width:300, height:200, fill_color:16777215, line_visible:true}}
 
 - add_picture: 插入图片
   {action:"add_picture", slide:1, params:{pic_path:"image.png", left:100, top:100, width:200, height:150}}
@@ -309,7 +314,10 @@ def execute_actions(ppt, actions, dry_run=False, progress_callback=None):
         params = act.get("params", {})
 
         try:
-            result = _dispatch(ppt, action, slide, target, params)
+            if hasattr(ppt, "execute_action"):
+                result = ppt.execute_action(act)
+            else:
+                result = _dispatch(ppt, action, slide, target, params)
             entry = _format_progress_entry(result, slide=slide, index=i + 1, success=True)
             print(f"  {entry}")
             if progress_callback:
@@ -343,7 +351,17 @@ def _dispatch(ppt, action, slide, target, params):
     if action == "add_textbox":
         return ppt.add_textbox(slide, params["text"],
                                left=params.get("left", 100), top=params.get("top", 100),
-                               width=params.get("width", 300), height=params.get("height", 50))
+                               width=params.get("width", 300), height=params.get("height", 50),
+                               fill_color=params.get("fill_color"),
+                               font_size=params.get("font_size"),
+                               font_color=params.get("font_color"))
+    if action == "add_shape":
+        return ppt.add_shape(slide,
+                             shape_type=params.get("shape_type", 1),
+                             left=params.get("left", 100), top=params.get("top", 100),
+                             width=params.get("width", 300), height=params.get("height", 200),
+                             fill_color=params.get("fill_color"),
+                             line_visible=params.get("line_visible", True))
     if action == "add_picture":
         return ppt.add_picture(slide, params["pic_path"],
                                left=params.get("left", 100), top=params.get("top", 100),
@@ -422,7 +440,7 @@ def _dispatch(ppt, action, slide, target, params):
             else:
                 results.append(ppt.resize_shape(shape,
                                width=params.get("width"), height=params.get("height")))
-        elif action == "delete":
+        elif action in ("delete", "delete_shape"):
             results.append(ppt.delete_shape(shape))
             break  # 删除后不继续遍历
         elif action == "animation":
@@ -438,15 +456,14 @@ def _dispatch(ppt, action, slide, target, params):
 # ---------------------------------------------------------------------------
 def run_single(pptx_path, instruction, output=None, dry_run=False,
                api_base=None, model=None, api_key=None,
-               headed=False, notes_progress=False, note_slide=None):
+               headed=False, notes_progress=False, note_slide=None,
+               backend="pywin32", vba_module="PptEditorBridge"):
     """单次指令模式 (可作为模块调用)"""
-    from pptx_editor_com import PowerPointCOM
-
     _api_base = api_base or get_api_config()[0]
     _model = model or get_api_config()[1]
     _api_key = api_key or get_api_config()[2]
 
-    ppt = PowerPointCOM(visible=headed)
+    ppt = create_backend(backend, visible=headed, vba_module=vba_module)
     try:
         ppt.open(pptx_path)
         structure = ppt.inspect()
@@ -492,15 +509,14 @@ def run_single(pptx_path, instruction, output=None, dry_run=False,
 
 
 def run_interactive(pptx_path, output=None, api_base=None, model=None, api_key=None,
-                    headed=False, notes_progress=False, note_slide=None):
+                    headed=False, notes_progress=False, note_slide=None,
+                    backend="pywin32", vba_module="PptEditorBridge"):
     """交互式多轮对话模式"""
-    from pptx_editor_com import PowerPointCOM
-
     _api_base = api_base or get_api_config()[0]
     _model = model or get_api_config()[1]
     _api_key = api_key or get_api_config()[2]
 
-    ppt = PowerPointCOM(visible=headed)
+    ppt = create_backend(backend, visible=headed, vba_module=vba_module)
     try:
         ppt.open(pptx_path)
         structure = ppt.inspect()
@@ -597,6 +613,7 @@ def main():
     parser.add_argument("--headed", action="store_true", help="以可见窗口模式打开 PowerPoint")
     parser.add_argument("--notes-progress", action="store_true", help="执行时将当前指令写入演讲者备注")
     parser.add_argument("--note-slide", type=int, help="将进度备注固定写到指定页")
+    add_backend_arguments(parser)
     args = parser.parse_args()
 
     if not os.path.exists(args.pptx_file):
@@ -606,8 +623,7 @@ def main():
     api_base, model, api_key = get_api_config(args)
 
     if args.inspect:
-        from pptx_editor_com import PowerPointCOM
-        ppt = PowerPointCOM(visible=args.headed)
+        ppt = create_backend(args.backend, visible=args.headed, vba_module=args.vba_module)
         try:
             ppt.open(args.pptx_file)
             structure = ppt.inspect()
@@ -619,8 +635,10 @@ def main():
             return
 
     if args.exec_script:
-        from pptx_editor_com import PowerPointCOM
-        ppt = PowerPointCOM(visible=args.headed)
+        if args.backend == "vba":
+            print("❌ VBA backend 当前不支持 --exec-script。请使用 --exec-actions 或切回 --backend pywin32")
+            sys.exit(1)
+        ppt = create_backend(args.backend, visible=args.headed, vba_module=args.vba_module)
         try:
             ppt.open(args.pptx_file)
             if args.inspect and not args.exec_actions:
@@ -665,7 +683,6 @@ def main():
         return
 
     if args.exec_actions:
-        from pptx_editor_com import PowerPointCOM
         raw = args.exec_actions
         # Try as file path first
         if os.path.exists(raw):
@@ -676,7 +693,7 @@ def main():
         except json.JSONDecodeError as e:
             print(f"❌ JSON 解析失败: {e}")
             sys.exit(1)
-        ppt = PowerPointCOM(visible=args.headed)
+        ppt = create_backend(args.backend, visible=args.headed, vba_module=args.vba_module)
         try:
             ppt.open(args.pptx_file)
             if args.inspect:
@@ -729,6 +746,8 @@ def main():
             headed=args.headed,
             notes_progress=args.notes_progress,
             note_slide=args.note_slide,
+            backend=args.backend,
+            vba_module=args.vba_module,
         )
         return
 
@@ -746,8 +765,7 @@ def main():
     # 批量模式: 换行分隔多条指令
     lines = [l.strip() for l in instructions.split("\n") if l.strip()]
 
-    from pptx_editor_com import PowerPointCOM
-    ppt = PowerPointCOM(visible=args.headed)
+    ppt = create_backend(args.backend, visible=args.headed, vba_module=args.vba_module)
     try:
         ppt.open(args.pptx_file)
 
