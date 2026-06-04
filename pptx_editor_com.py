@@ -575,6 +575,9 @@ def run(ppt, intents, output):
 
         # 需要查找shape的操作
         rng = [sn] if sn else list(range(1, ppt.prs.Slides.Count+1))
+        # move_shape/resize_shape: 清除 target 中的 position，避免把目标位置误当定位条件
+        if a in ("move_shape", "resize_shape"):
+            t.pop("position", None)
         for si in rng:
             shapes = ppt.find_shape(si, t)
             if not shapes:
