@@ -39,11 +39,11 @@ del /q test_report_modified.pptx 2>nul
 del /q test_report_structure.json 2>nul
 del /q test_img.png 2>nul
 del /q test_bg.png 2>nul
-del /q demo_output.pptx 2>nul
-del /q demo_output.pdf 2>nul
-del /q demo_final.pptx 2>nul
-del /q demo_merged.pptx 2>nul
-del /q demo_slide1.png 2>nul
+del /q demo_output*.pptx 2>nul
+del /q demo_output*.pdf 2>nul
+del /q demo_final*.pptx 2>nul
+del /q demo_merged*.pptx 2>nul
+del /q demo_slide1*.png 2>nul
 del /q *_modified.pptx 2>nul
 del /q *_structure.json 2>nul
 echo.

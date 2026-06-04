@@ -66,9 +66,17 @@ def main():
     print(f"  Mode: {'HEADED (visual)' if headed else 'HEADLESS (fast)'}")
     print("=" * 55)
 
-    print("\n[Step 0] Generating base PPTX...")
+    print(f"\n[Step 0] Generating base PPTX...")
     import gen_test
     print()
+
+    # Timestamped output filenames to avoid lock conflicts
+    ts = time.strftime("%H%M%S")
+    OUT_PPTX = f"demo_output_{ts}.pptx"
+    OUT_PDF = f"demo_output_{ts}.pdf"
+    OUT_PNG = f"demo_slide1_{ts}.png"
+    OUT_MERGED = f"demo_merged_{ts}.pptx"
+    OUT_FINAL = f"demo_final_{ts}.pptx"
 
     p = PowerPointCOM(visible=headed)
     try:
@@ -379,9 +387,9 @@ def main():
         # ============================================================
         print("\n--- Export & Save ---")
         goto(1)
-        test("export_pdf", lambda: p.export_pdf("demo_output.pdf"))
-        test("export_slide1_png", lambda: p.export_image(1, "demo_slide1.png"))
-        test("save_pptx", lambda: (p.save("demo_output.pptx"), "saved")[1])
+        test("export_pdf", lambda: p.export_pdf(OUT_PDF))
+        test("export_slide1_png", lambda: p.export_image(1, OUT_PNG))
+        test("save_pptx", lambda: (p.save(OUT_PPTX), "saved")[1])
 
         # ============================================================
         # SLIDE STRUCTURE OPS (last - changes indices)
@@ -398,11 +406,11 @@ def main():
         test("set_slide_size", lambda: p.set_slide_size(960, 540))  # 16:9
 
         # Merge
-        test("merge", lambda: p.merge_presentations(["test_report.pptx"], "demo_merged.pptx"))
+        test("merge", lambda: p.merge_presentations(["test_report.pptx"], OUT_MERGED))
 
         # Final save
         goto(1)
-        test("final_save", lambda: (p.save("demo_final.pptx"), "saved")[1])
+        test("final_save", lambda: (p.save(OUT_FINAL), "saved")[1])
 
     finally:
         if headed:
@@ -419,7 +427,7 @@ def main():
     print("\n" + "=" * 55)
     print(f"  RESULTS: {passed} passed, {failed} failed, {passed + failed} total")
     if failed == 0:
-        print("  All tests passed! Check demo_final.pptx")
+        print("  All tests passed! Check " + OUT_FINAL + "")
     print("=" * 55)
     if errors:
         print("\nFailed tests:")
