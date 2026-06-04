@@ -170,6 +170,12 @@ class PowerPointCOM:
                     try: ok = shape.HasTable
                     except: ok = False
                 if t == "picture" and shape.Type != 13: ok = False
+                if t == "chart":
+                    try: ok = shape.HasChart
+                    except: ok = False
+                if t == "textbox":
+                    try: ok = shape.Type == 17 and not shape.PlaceholderFormat
+                    except: ok = shape.Type == 17
             if ok and "position" in target:
                 sw = self.prs.PageSetup.SlideWidth
                 sh = self.prs.PageSetup.SlideHeight

@@ -31,6 +31,9 @@ PPTX 编辑器 — LLM 意图解析 + COM 执行 (Windows Only)
 import sys, os, json, argparse, requests
 
 
+CLOSE_DELAY_SECONDS = 30
+
+
 def _resolve_note_slide(ppt, slide=None, note_slide=None):
     """Choose which slide should receive progress notes."""
     if note_slide is not None:
@@ -69,6 +72,16 @@ def _build_script_helpers(ppt, note_slide=None):
 
     return log_note, sleep
 
+
+def _close_after_grace(ppt, modified=False):
+    """Keep PowerPoint open briefly after real modifications."""
+    if modified:
+        import time
+
+        print(f"⏳ 已完成修改，保留 PowerPoint {CLOSE_DELAY_SECONDS}s 后关闭...")
+        time.sleep(CLOSE_DELAY_SECONDS)
+    ppt.close()
+
 # ---------------------------------------------------------------------------
 # LLM 系统提示词
 # ---------------------------------------------------------------------------
@@ -80,7 +93,7 @@ SYSTEM_PROMPT = r"""你是一个 PowerPoint 编辑助手。用户会给你一个
 ### 文本操作
 - modify_text: 修改文本
   {action:"modify_text", slide:1, target:{type:"title"}, params:{new_text:"新文本"}}
-  target 可含: type(title/subtitle/body/table/picture), position(左上/中中/右下等), text_match(匹配文本片段)
+    target 可含: type(title/subtitle/body/table/picture/chart/textbox), position(左上/中中/右下等), text_match(匹配文本片段)
 
 - modify_font: 修改字体样式
   {action:"modify_font", slide:1, target:{...}, params:{font_size:24, bold:true, italic:false, underline:false, strikethrough:false, color:255, font_name:"微软雅黑", font_size_factor:1.5}}
@@ -115,6 +128,22 @@ SYSTEM_PROMPT = r"""你是一个 PowerPoint 编辑助手。用户会给你一个
 - add_picture: 插入图片
   {action:"add_picture", slide:1, params:{pic_path:"image.png", left:100, top:100, width:200, height:150}}
 
+- add_table: 添加表格
+    {action:"add_table", slide:1, params:{rows:3, cols:4, left:100, top:100, width:400, height:200}}
+
+- add_chart: 添加图表
+    {action:"add_chart", slide:1, params:{chart_type:4, data:[[1,2,3],[4,5,6]], left:100, top:100, width:400, height:300}}
+
+- add_smartart: 添加 SmartArt
+    {action:"add_smartart", slide:1, params:{layout_id:1, left:100, top:100, width:400, height:300}}
+
+- add_audio / add_video: 插入媒体
+    {action:"add_audio", slide:1, params:{audio_path:"sound.mp3", left:100, top:100, width:50, height:50}}
+    {action:"add_video", slide:1, params:{video_path:"demo.mp4", left:100, top:100, width:400, height:300}}
+
+- add_freeform: 添加自由形状
+    {action:"add_freeform", slide:1, params:{points:[[100,100],[200,100],[180,180],[100,200]]}}
+
 ### 幻灯片管理
 - add_slide: 添加幻灯片
   {action:"add_slide", params:{index:3, layout:12}}
@@ -125,6 +154,38 @@ SYSTEM_PROMPT = r"""你是一个 PowerPoint 编辑助手。用户会给你一个
 
 - move_slide: 移动幻灯片
   {action:"move_slide", slide:2, params:{new_pos:1}}
+
+- duplicate_slide: 复制幻灯片
+    {action:"duplicate_slide", slide:2}
+
+- set_slide_size / set_slide_size_preset: 设定页面尺寸
+    {action:"set_slide_size", params:{width:960, height:540}}
+    {action:"set_slide_size_preset", params:{preset:"widescreen"}}
+
+- set_slide_background / set_slide_background_image: 设置背景
+    {action:"set_slide_background", slide:1, params:{color_bgr:16777215}}
+    {action:"set_slide_background_image", slide:1, params:{image_path:"bg.png"}}
+
+- set_notes / append_notes: 设置备注
+    {action:"set_notes", slide:1, params:{text:"演讲者备注"}}
+    {action:"append_notes", slide:1, params:{text:"补充备注", separator:"\n"}}
+
+- add_comment / delete_comment: 幻灯片评论
+    {action:"add_comment", slide:1, params:{text:"需要复核", author:"Reviewer", x:10, y:10}}
+    {action:"delete_comment", slide:1, params:{comment_idx:1}}
+
+- add_section / delete_section / rename_section: 分节管理
+    {action:"add_section", params:{name:"Overview", slide_idx:1}}
+    {action:"delete_section", params:{section_idx:1}}
+    {action:"rename_section", params:{section_idx:1, new_name:"Intro"}}
+
+- set_slideshow_settings / start_slideshow: 放映设置
+    {action:"set_slideshow_settings", params:{loop:false, show_narration:true, show_animation:true}}
+    {action:"start_slideshow", params:{from_slide:1, to_slide:3}}
+
+- merge_presentations / print_presentation: 合并或打印
+    {action:"merge_presentations", params:{file_paths:["other.pptx"], output_path:"merged.pptx"}}
+    {action:"print_presentation", params:{printer_name:"Microsoft Print to PDF", copies:1}}
 
 ### 表格操作
 - modify_cell: 修改单元格 (1-based行列)
@@ -143,6 +204,45 @@ SYSTEM_PROMPT = r"""你是一个 PowerPoint 编辑助手。用户会给你一个
 
 - remove_animation: 删除动画
   {action:"remove_animation", slide:1, params:{anim_index:1}}
+
+- modify_animation_effect: 修改动画效果
+    {action:"modify_animation_effect", slide:1, params:{anim_index:1, effect:"zoom"}}
+
+### 形状增强
+- rotate_shape / flip_shape / set_zorder
+    {action:"rotate_shape", slide:1, target:{...}, params:{angle:45}}
+    {action:"flip_shape", slide:1, target:{...}, params:{direction:"horizontal"}}
+    {action:"set_zorder", slide:1, target:{...}, params:{position:"front"}}
+
+- crop_picture / set_brightness / set_contrast / replace_picture
+    {action:"crop_picture", slide:1, target:{type:"picture"}, params:{left:10, top:0, right:10, bottom:0}}
+    {action:"set_brightness", slide:1, target:{type:"picture"}, params:{value:0.4}}
+    {action:"set_contrast", slide:1, target:{type:"picture"}, params:{value:0.3}}
+    {action:"replace_picture", slide:1, target:{type:"picture"}, params:{new_path:"new.png"}}
+
+- add_bullet / set_text_autofit / add_hyperlink / set_word_art
+    {action:"add_bullet", slide:1, target:{...}, params:{level:1}}
+    {action:"set_text_autofit", slide:1, target:{...}, params:{mode:"fit"}}
+    {action:"add_hyperlink", slide:1, target:{...}, params:{url:"https://example.com", text:"访问链接"}}
+    {action:"set_word_art", slide:1, target:{...}, params:{style:1}}
+
+- set_line_spacing / set_paragraph_spacing
+    {action:"set_line_spacing", slide:1, target:{...}, params:{spacing:1.5}}
+    {action:"set_paragraph_spacing", slide:1, target:{...}, params:{before:6, after:4}}
+
+- set_shadow / set_reflection / set_glow / set_3d_rotation
+    {action:"set_shadow", slide:1, target:{...}, params:{preset:1}}
+    {action:"set_reflection", slide:1, target:{...}, params:{preset:1}}
+    {action:"set_glow", slide:1, target:{...}, params:{color_bgr:255, radius:10}}
+    {action:"set_3d_rotation", slide:1, target:{...}, params:{x:10, y:20, z:0}}
+
+- set_media_playback
+    {action:"set_media_playback", slide:1, target:{name:"Video 1"}, params:{auto_play:true, loop:false, hide_on_stop:false}}
+
+- set_chart_title / set_chart_style / modify_chart_data
+    {action:"set_chart_title", slide:1, target:{type:"chart"}, params:{title:"季度营收"}}
+    {action:"set_chart_style", slide:1, target:{type:"chart"}, params:{style_id:10}}
+    {action:"modify_chart_data", slide:1, target:{type:"chart"}, params:{series_idx:1, values:[1,2,3,4]}}
 
 ### 切换效果
 - transition: 幻灯片切换效果
@@ -331,6 +431,28 @@ def _dispatch(ppt, action, slide, target, params):
         return ppt.add_picture(slide, params["pic_path"],
                                left=params.get("left", 100), top=params.get("top", 100),
                                width=params.get("width", 200), height=params.get("height", 150))
+    if action == "add_table":
+        return ppt.add_table(slide, params["rows"], params["cols"],
+                             left=params.get("left", 100), top=params.get("top", 100),
+                             width=params.get("width", 400), height=params.get("height", 200))
+    if action == "add_chart":
+        return ppt.add_chart(slide, params.get("chart_type", 4), params.get("data"),
+                             left=params.get("left", 100), top=params.get("top", 100),
+                             width=params.get("width", 400), height=params.get("height", 300))
+    if action == "add_smartart":
+        return ppt.add_smartart(slide, params.get("layout_id"),
+                                left=params.get("left", 100), top=params.get("top", 100),
+                                width=params.get("width", 400), height=params.get("height", 300))
+    if action == "add_audio":
+        return ppt.add_audio(slide, params["audio_path"],
+                             left=params.get("left", 100), top=params.get("top", 100),
+                             width=params.get("width", 50), height=params.get("height", 50))
+    if action == "add_video":
+        return ppt.add_video(slide, params["video_path"],
+                             left=params.get("left", 100), top=params.get("top", 100),
+                             width=params.get("width", 400), height=params.get("height", 300))
+    if action == "add_freeform":
+        return ppt.add_freeform(slide, params["points"])
     if action == "export_pdf":
         pdf_path = ppt.filepath.rsplit(".", 1)[0] + ".pdf"
         ppt.prs.SaveAs(os.path.abspath(pdf_path), 32)  # ppSaveAsPDF=32
@@ -357,6 +479,46 @@ def _dispatch(ppt, action, slide, target, params):
             seq.Item(idx).Delete()
             return f"第{slide}页删除第{idx}个动画"
         return f"第{slide}页无第{idx}个动画"
+    if action == "modify_animation_effect":
+        return ppt.modify_animation_effect(slide, params["anim_index"], params["effect"])
+    if action == "duplicate_slide":
+        return ppt.duplicate_slide(slide)
+    if action == "set_slide_size":
+        return ppt.set_slide_size(params["width"], params["height"])
+    if action == "set_slide_size_preset":
+        return ppt.set_slide_size_preset(params["preset"])
+    if action == "set_slide_background":
+        return ppt.set_slide_background(slide, params["color_bgr"])
+    if action == "set_slide_background_image":
+        return ppt.set_slide_background_image(slide, params["image_path"])
+    if action == "set_notes":
+        return ppt.set_notes(slide, params["text"])
+    if action == "append_notes":
+        return ppt.append_notes(slide, params["text"], params.get("separator", "\n"))
+    if action == "add_comment":
+        return ppt.add_comment(slide, params["text"], params.get("author", "Author"),
+                               params.get("x", 10), params.get("y", 10))
+    if action == "delete_comment":
+        return ppt.delete_comment(slide, params["comment_idx"])
+    if action == "add_section":
+        return ppt.add_section(params["name"], params["slide_idx"])
+    if action == "delete_section":
+        return ppt.delete_section(params["section_idx"])
+    if action == "rename_section":
+        return ppt.rename_section(params["section_idx"], params["new_name"])
+    if action == "set_slideshow_settings":
+        return ppt.set_slideshow_settings(loop=params.get("loop", False),
+                                          show_narration=params.get("show_narration", True),
+                                          show_animation=params.get("show_animation", True))
+    if action == "start_slideshow":
+        return ppt.start_slideshow(from_slide=params.get("from_slide", 1),
+                                   to_slide=params.get("to_slide"))
+    if action == "merge_presentations":
+        return ppt.merge_presentations(params["file_paths"], params.get("output_path"))
+    if action == "print_presentation":
+        return ppt.print_presentation(printer_name=params.get("printer_name"),
+                                      copies=params.get("copies", 1),
+                                      print_range=params.get("print_range"))
 
     # --- 表格特殊操作 ---
     if action == "modify_cell":
@@ -410,6 +572,55 @@ def _dispatch(ppt, action, slide, target, params):
             break  # 删除后不继续遍历
         elif action == "animation":
             results.append(ppt.add_animation(slide, shape, params.get("effect", "appear")))
+        elif action == "rotate_shape":
+            results.append(ppt.rotate_shape(shape, params["angle"]))
+        elif action == "flip_shape":
+            results.append(ppt.flip_shape(shape, params.get("direction", "horizontal")))
+        elif action == "set_zorder":
+            results.append(ppt.set_zorder(shape, params["position"]))
+        elif action == "crop_picture":
+            results.append(ppt.crop_picture(shape,
+                           left=params.get("left", 0), top=params.get("top", 0),
+                           right=params.get("right", 0), bottom=params.get("bottom", 0)))
+        elif action == "set_brightness":
+            results.append(ppt.set_brightness(shape, params["value"]))
+        elif action == "set_contrast":
+            results.append(ppt.set_contrast(shape, params["value"]))
+        elif action == "replace_picture":
+            results.append(ppt.replace_picture(shape, params["new_path"]))
+        elif action == "add_bullet":
+            results.append(ppt.add_bullet(shape, params.get("level", 1)))
+        elif action == "set_text_autofit":
+            results.append(ppt.set_text_autofit(shape, params["mode"]))
+        elif action == "add_hyperlink":
+            results.append(ppt.add_hyperlink(shape, params["url"], params.get("text")))
+        elif action == "set_word_art":
+            results.append(ppt.set_word_art(shape, params["style"]))
+        elif action == "set_line_spacing":
+            results.append(ppt.set_line_spacing(shape, params["spacing"]))
+        elif action == "set_paragraph_spacing":
+            results.append(ppt.set_paragraph_spacing(shape,
+                           before=params.get("before", 0), after=params.get("after", 0)))
+        elif action == "set_shadow":
+            results.append(ppt.set_shadow(shape, params["preset"]))
+        elif action == "set_reflection":
+            results.append(ppt.set_reflection(shape, params["preset"]))
+        elif action == "set_glow":
+            results.append(ppt.set_glow(shape, params["color_bgr"], params.get("radius", 10)))
+        elif action == "set_3d_rotation":
+            results.append(ppt.set_3d_rotation(shape,
+                           x=params.get("x", 0), y=params.get("y", 0), z=params.get("z", 0)))
+        elif action == "set_media_playback":
+            results.append(ppt.set_media_playback(shape,
+                           auto_play=params.get("auto_play", False),
+                           loop=params.get("loop", False),
+                           hide_on_stop=params.get("hide_on_stop", False)))
+        elif action == "modify_chart_data":
+            results.append(ppt.modify_chart_data(shape, params["series_idx"], params["values"]))
+        elif action == "set_chart_title":
+            results.append(ppt.set_chart_title(shape, params["title"]))
+        elif action == "set_chart_style":
+            results.append(ppt.set_chart_style(shape, params["style_id"]))
         else:
             raise ValueError(f"未知操作: {action}")
 
@@ -430,6 +641,7 @@ def run_single(pptx_path, instruction, output=None, dry_run=False,
     _api_key = api_key or get_api_config()[2]
 
     ppt = PowerPointCOM(visible=headed)
+    modified = False
     try:
         ppt.open(pptx_path)
         structure = ppt.inspect()
@@ -456,9 +668,10 @@ def run_single(pptx_path, instruction, output=None, dry_run=False,
             )
         if ok and not dry_run:
             ppt.save(output)
+            modified = True
         return ok
     finally:
-        ppt.close()
+        _close_after_grace(ppt, modified=modified)
 
 
 def run_interactive(pptx_path, output=None, api_base=None, model=None, api_key=None,
@@ -471,6 +684,7 @@ def run_interactive(pptx_path, output=None, api_base=None, model=None, api_key=N
     _api_key = api_key or get_api_config()[2]
 
     ppt = PowerPointCOM(visible=headed)
+    modified = False
     try:
         ppt.open(pptx_path)
         structure = ppt.inspect()
@@ -516,6 +730,7 @@ def run_interactive(pptx_path, output=None, api_base=None, model=None, api_key=N
                 )
 
             execute_actions(ppt, actions)
+            modified = True
 
             if notes_progress:
                 _write_progress_note(
@@ -536,7 +751,7 @@ def run_interactive(pptx_path, output=None, api_base=None, model=None, api_key=N
 
         ppt.save(output)
     finally:
-        ppt.close()
+        _close_after_grace(ppt, modified=modified)
 
 
 def main():
@@ -572,13 +787,14 @@ def main():
             ppt.print_structure(structure)
             print("\n" + json.dumps(structure, ensure_ascii=False, indent=2))
         finally:
-            ppt.close()
+            _close_after_grace(ppt, modified=False)
         if not args.exec_script and not args.exec_actions:
             return
 
     if args.exec_script:
         from pptx_editor_com import PowerPointCOM
         ppt = PowerPointCOM(visible=args.headed)
+        modified = False
         try:
             ppt.open(args.pptx_file)
             if args.inspect and not args.exec_actions:
@@ -613,13 +829,14 @@ def main():
                     append=True,
                 )
             ppt.save(args.output)
+            modified = True
             print("✅ 脚本执行完成")
         except Exception as e:
             print(f"❌ 脚本执行失败: {e}")
             import traceback; traceback.print_exc()
             sys.exit(1)
         finally:
-            ppt.close()
+            _close_after_grace(ppt, modified=modified)
         return
 
     if args.exec_actions:
@@ -635,6 +852,7 @@ def main():
             print(f"❌ JSON 解析失败: {e}")
             sys.exit(1)
         ppt = PowerPointCOM(visible=args.headed)
+        modified = False
         try:
             ppt.open(args.pptx_file)
             if args.inspect:
@@ -656,12 +874,13 @@ def main():
                 )
             if not args.dry_run:
                 ppt.save(args.output)
+                modified = True
         except Exception as e:
             print(f"❌ 动作执行失败: {e}")
             import traceback; traceback.print_exc()
             sys.exit(1)
         finally:
-            ppt.close()
+            _close_after_grace(ppt, modified=modified)
         return
 
     if args.interactive:
@@ -693,6 +912,7 @@ def main():
 
     from pptx_editor_com import PowerPointCOM
     ppt = PowerPointCOM(visible=args.headed)
+    modified = False
     try:
         ppt.open(args.pptx_file)
 
@@ -720,11 +940,13 @@ def main():
                     note_slide=args.note_slide,
                     append=True,
                 )
+            if not args.dry_run:
+                modified = True
 
         if not args.dry_run:
             ppt.save(args.output)
     finally:
-        ppt.close()
+        _close_after_grace(ppt, modified=modified)
 
 
 if __name__ == "__main__":

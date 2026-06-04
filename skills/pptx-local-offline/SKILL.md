@@ -9,6 +9,21 @@ description: "Edit PowerPoint completely offline on a local Windows machine. Thr
 
 在同一台 Windows 机器上执行 PowerPoint COM 自动化，实现离线 PPTX 编辑。支持三种执行模式，按需选择。
 
+## 使用优先级
+
+默认按以下优先级选择模式：
+
+1. `JSON actions`
+2. `exec-script`
+3. 其他模式（LLM 自然语言 / 交互模式）
+
+选择原则：
+- 能用 JSON actions 表达的需求，优先用 `--exec-actions`
+- JSON actions 还不支持、或需要复杂控制流时，再退到 `--exec-script`
+- 只有在前两者都不合适时，才使用自然语言解析或交互模式
+
+发生真实修改后，PowerPoint 会额外保留 30 秒再关闭，便于确认结果。
+
 ## 三种执行模式
 
 ### 模式 A：本地 LLM 意图解析（Ollama/LM Studio）
@@ -80,7 +95,8 @@ JSON actions 也支持等待动作：
 | 场景 | 推荐模式 | 原因 |
 |------|----------|------|
 | 气隙/涉密环境，无任何外部 AI | A (Ollama) | 完全自包含 |
-| 本地跑 Claude Code/Cursor | B (exec-script) | Claude 自己就是 LLM，直接生成代码最灵活 |
+| 本地跑 Claude Code/Cursor | C (exec-actions) | 优先使用结构化 JSON，行为稳定且易审计 |
+| JSON 还不能覆盖的复杂操作 | B (exec-script) | 作为第二优先级，适合复杂控制流和尚未接入的 COM 能力 |
 | Agent 通过 MCP/API 远程调用 | C (exec-actions) | JSON 标准化接口，易于集成 |
 | 简单批量修改 | C (exec-actions) | JSON 声明式，易于复用和版本化 |
 
@@ -142,6 +158,7 @@ setx OPENAI_API_KEY "ollama"
 | **BGR 颜色** | COM 使用 BGR 格式！红=0x0000FF，蓝=0xFF0000 |
 | **1-Based 索引** | 所有 COM 索引从 1 开始 |
 | **Session 0 限制** | schtasks 启动的进程无法 Open/SaveAs，需 RDP 桌面会话 |
+| **自动延迟关闭** | 发生真实修改后，PowerPoint 会保留 30 秒再关闭，便于人工确认结果 |
 | **Notes 进度显示** | `--notes-progress` 默认会覆盖目标备注页当前内容；如需保留历史请在脚本里用 `log_note(..., append=True)` |
 | **内存竞争（模式 A）** | Ollama + PowerPoint 同时运行，建议 16GB+ |
 | **模型质量（模式 A）** | 本地模型不如 GPT-4/Claude，复杂指令可能需多次尝试 |
