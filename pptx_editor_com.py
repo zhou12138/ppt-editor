@@ -46,7 +46,8 @@ class PowerPointCOM:
 
     def open(self, path):
         self.filepath = os.path.abspath(path)
-        self.prs = self.app.Presentations.Open(self.filepath, False, False, False)
+        with_window = self.app.Visible
+        self.prs = self.app.Presentations.Open(self.filepath, False, False, with_window)
         print(f"📂 已打开: {self.filepath} ({self.prs.Slides.Count}页)")
         return self
 
