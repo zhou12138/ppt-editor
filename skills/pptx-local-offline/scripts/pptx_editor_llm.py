@@ -51,6 +51,17 @@ def _write_progress_note(ppt, message, slide=None, note_slide=None, append=False
     return ppt.set_notes(target_slide, message)
 
 
+def _format_progress_entry(detail, slide=None, index=None, success=True):
+    """Format one incremental notes entry for an executed action."""
+    prefix = "✅" if success else "❌"
+    text = detail
+    if isinstance(slide, int) and slide > 0 and f"第{slide}页" not in detail:
+        text = f"第{slide}页: {detail}"
+    if index is not None:
+        return f"{prefix} [{index}] {text}"
+    return f"{prefix} {text}"
+
+
 def _build_script_helpers(ppt, note_slide=None):
     """Expose note logging and sleep helpers inside --exec-script mode."""
     def log_note(message, slide=None, append=True):
@@ -100,7 +111,7 @@ def _run_script_code(ppt, script_code, script_label, note_slide=None, notes_prog
             ppt,
             f"开始执行脚本: {script_label}",
             note_slide=note_slide,
-            append=False,
+            append=True,
         )
     exec(script_code, {
         "ppt": ppt,
@@ -214,11 +225,24 @@ def _run_interactive_session(pptx_path, mode, initial_payload=None, output=None,
                 if notes_progress and not dry_run:
                     _write_progress_note(
                         ppt,
-                        f"开始执行动作集: {len(actions) if isinstance(actions, list) else 1} 个动作",
+                        f"执行动作集: {len(actions) if isinstance(actions, list) else 1} 个动作",
                         note_slide=note_slide,
-                        append=False,
+                        append=True,
                     )
-                execute_actions(ppt, actions, dry_run=dry_run)
+                execute_actions(
+                    ppt,
+                    actions,
+                    dry_run=dry_run,
+                    progress_callback=(
+                        lambda message, slide=None: _write_progress_note(
+                            ppt,
+                            message,
+                            slide=slide,
+                            note_slide=note_slide,
+                            append=True,
+                        )
+                    ) if notes_progress and not dry_run else None,
+                )
                 if not dry_run:
                     modified = True
             else:
@@ -289,16 +313,29 @@ def _run_interactive_session(pptx_path, mode, initial_payload=None, output=None,
                         count = len(payload) if isinstance(payload, list) else 1
                         _write_progress_note(
                             ppt,
-                            f"开始执行动作集: {count} 个动作",
+                            f"执行动作集: {count} 个动作",
                             note_slide=note_slide,
-                            append=False,
+                            append=True,
                         )
-                    execute_actions(ppt, payload, dry_run=dry_run)
+                    execute_actions(
+                        ppt,
+                        payload,
+                        dry_run=dry_run,
+                        progress_callback=(
+                            lambda message, slide=None: _write_progress_note(
+                                ppt,
+                                message,
+                                slide=slide,
+                                note_slide=note_slide,
+                                append=True,
+                            )
+                        ) if notes_progress and not dry_run else None,
+                    )
                     if notes_progress and not dry_run:
                         count = len(payload) if isinstance(payload, list) else 1
                         _write_progress_note(
                             ppt,
-                            f"动作集执行完成: {count} 个动作",
+                            f"完成动作集: {count} 个动作",
                             note_slide=note_slide,
                             append=True,
                         )
@@ -619,7 +656,7 @@ def parse_intent_llm(instruction, pptx_structure, api_base, model, api_key,
 # ---------------------------------------------------------------------------
 # 执行操作
 # ---------------------------------------------------------------------------
-def execute_actions(ppt, actions, dry_run=False):
+def execute_actions(ppt, actions, dry_run=False, progress_callback=None):
     """执行 LLM 解析出的操作列表"""
     if isinstance(actions, dict):
         # 可能是 clarify 请求
@@ -651,9 +688,15 @@ def execute_actions(ppt, actions, dry_run=False):
 
         try:
             result = _dispatch(ppt, action, slide, target, params)
-            print(f"  ✅ [{i+1}] {result}")
+            entry = _format_progress_entry(result, slide=slide, index=i + 1, success=True)
+            print(f"  {entry}")
+            if progress_callback:
+                progress_callback(entry, slide=slide)
         except Exception as e:
-            print(f"  ❌ [{i+1}] {action} 失败: {e}")
+            entry = _format_progress_entry(f"{action} 失败: {e}", slide=slide, index=i + 1, success=False)
+            print(f"  {entry}")
+            if progress_callback:
+                progress_callback(entry, slide=slide)
 
     return True
 
@@ -907,14 +950,27 @@ def run_single(pptx_path, instruction, output=None, dry_run=False,
                 ppt,
                 f"执行指令: {instruction}",
                 note_slide=note_slide,
-                append=False,
+                append=True,
             )
 
-        ok = execute_actions(ppt, actions, dry_run=dry_run)
+        ok = execute_actions(
+            ppt,
+            actions,
+            dry_run=dry_run,
+            progress_callback=(
+                lambda message, slide=None: _write_progress_note(
+                    ppt,
+                    message,
+                    slide=slide,
+                    note_slide=note_slide,
+                    append=True,
+                )
+            ) if notes_progress and not dry_run else None,
+        )
         if ok and notes_progress and not dry_run:
             _write_progress_note(
                 ppt,
-                f"执行完成: {instruction}",
+                f"完成指令: {instruction}",
                 note_slide=note_slide,
                 append=True,
             )
@@ -978,16 +1034,28 @@ def run_interactive(pptx_path, output=None, api_base=None, model=None, api_key=N
                     ppt,
                     f"执行指令: {instruction}",
                     note_slide=note_slide,
-                    append=False,
+                    append=True,
                 )
 
-            execute_actions(ppt, actions)
+            execute_actions(
+                ppt,
+                actions,
+                progress_callback=(
+                    lambda message, slide=None: _write_progress_note(
+                        ppt,
+                        message,
+                        slide=slide,
+                        note_slide=note_slide,
+                        append=True,
+                    )
+                ) if notes_progress else None,
+            )
             modified = True
 
             if notes_progress:
                 _write_progress_note(
                     ppt,
-                    f"执行完成: {instruction}",
+                    f"完成指令: {instruction}",
                     note_slide=note_slide,
                     append=True,
                 )
@@ -1092,7 +1160,7 @@ def main():
                     ppt,
                     f"开始执行脚本: {os.path.basename(script_path)}",
                     note_slide=args.note_slide,
-                    append=False,
+                    append=True,
                 )
             exec(script_code, {
                 "ppt": ppt,
@@ -1140,15 +1208,28 @@ def main():
             if args.notes_progress and not args.dry_run:
                 _write_progress_note(
                     ppt,
-                    f"开始执行动作集: {len(actions)} 个动作",
+                    f"执行动作集: {len(actions)} 个动作",
                     note_slide=args.note_slide,
-                    append=False,
+                    append=True,
                 )
-            execute_actions(ppt, actions, dry_run=args.dry_run)
+            execute_actions(
+                ppt,
+                actions,
+                dry_run=args.dry_run,
+                progress_callback=(
+                    lambda message, slide=None: _write_progress_note(
+                        ppt,
+                        message,
+                        slide=slide,
+                        note_slide=args.note_slide,
+                        append=True,
+                    )
+                ) if args.notes_progress and not args.dry_run else None,
+            )
             if args.notes_progress and not args.dry_run:
                 _write_progress_note(
                     ppt,
-                    f"动作集执行完成: {len(actions)} 个动作",
+                    f"完成动作集: {len(actions)} 个动作",
                     note_slide=args.note_slide,
                     append=True,
                 )
@@ -1210,13 +1291,26 @@ def main():
                     ppt,
                     f"执行指令: {instruction}",
                     note_slide=args.note_slide,
-                    append=False,
+                    append=True,
                 )
-            execute_actions(ppt, actions, dry_run=args.dry_run)
+            execute_actions(
+                ppt,
+                actions,
+                dry_run=args.dry_run,
+                progress_callback=(
+                    lambda message, slide=None: _write_progress_note(
+                        ppt,
+                        message,
+                        slide=slide,
+                        note_slide=args.note_slide,
+                        append=True,
+                    )
+                ) if args.notes_progress and not args.dry_run else None,
+            )
             if args.notes_progress and not args.dry_run:
                 _write_progress_note(
                     ppt,
-                    f"执行完成: {instruction}",
+                    f"完成指令: {instruction}",
                     note_slide=args.note_slide,
                     append=True,
                 )
