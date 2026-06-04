@@ -16,7 +16,8 @@ passed = 0
 failed = 0
 errors = []
 current_slide = [0]  # mutable for closure
-slide_ops = {}  # {slide_num: [(test_name, status, detail), ...]}
+slide_comment_idx = {}  # {slide_num: next_y_offset}
+ppt_ref = [None]  # ref to PowerPointCOM for comment writing
 
 def test(name, fn):
     global passed, failed
@@ -30,19 +31,30 @@ def test(name, fn):
             msg += f" ({result})"
             detail = result
         print(msg)
-        # Record operation for current slide
-        sn = current_slide[0]
-        if sn > 0:
-            slide_ops.setdefault(sn, []).append((name, "✅", detail))
+        # Write comment immediately
+        _write_comment(name, "✅", detail)
         if DELAY > 0:
             time.sleep(DELAY)
     except Exception as e:
         failed += 1
         errors.append((name, str(e)))
         print(f"FAIL: {e}")
-        sn = current_slide[0]
-        if sn > 0:
-            slide_ops.setdefault(sn, []).append((name, "❌", str(e)))
+        _write_comment(name, "❌", str(e)[:60])
+
+def _write_comment(name, status, detail):
+    sn = current_slide[0]
+    p = ppt_ref[0]
+    if sn <= 0 or p is None:
+        return
+    text = f"{status} {name}"
+    if detail:
+        text += f" → {detail}"
+    y = slide_comment_idx.get(sn, 10)
+    try:
+        p.add_comment(sn, text, "DemoTest", 10, y)
+        slide_comment_idx[sn] = y + 25
+    except:
+        pass
 
 def main():
     global passed, failed
@@ -59,6 +71,7 @@ def main():
     p = PowerPointCOM(visible=headed)
     try:
         p.open("test_report.pptx")
+        ppt_ref[0] = p
 
         # Helpers
         def goto(n):
@@ -370,24 +383,6 @@ def main():
 
         # Merge
         test("merge", lambda: p.merge_presentations(["test_report.pptx"], "demo_merged.pptx"))
-
-        # ============================================================
-        # WRITE OPERATION LOG AS COMMENTS
-        # ============================================================
-        print("\n--- Writing operation comments ---")
-        for sn, ops in sorted(slide_ops.items()):
-            lines = [f"Demo Test Operations (Slide {sn}):"]
-            for name, status, detail in ops:
-                line = f"  {status} {name}"
-                if detail:
-                    line += f" → {detail}"
-                lines.append(line)
-            comment_text = "\n".join(lines)
-            try:
-                p.add_comment(sn, comment_text, "DemoTest", 10, 10)
-                print(f"  Slide {sn}: {len(ops)} ops logged")
-            except Exception as e:
-                print(f"  Slide {sn}: comment failed: {e}")
 
         # Final save
         goto(1)
