@@ -214,7 +214,10 @@ def main():
         test("save_final", lambda: (p.save("test_out_final.pptx"), "saved")[1])
 
     finally:
-        p.close()
+        if headed:
+            print("\n  [HEADED] PowerPoint kept open for review. Close it manually when done.")
+        else:
+            p.close()
 
     # ---- SUMMARY ----
     print("\n" + "=" * 50)
