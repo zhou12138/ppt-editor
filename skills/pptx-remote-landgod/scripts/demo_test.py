@@ -67,7 +67,14 @@ def main():
     print("=" * 55)
 
     print(f"\n[Step 0] Generating base PPTX...")
-    import gen_test
+    try:
+        import gen_test
+    except ModuleNotFoundError as e:
+        if e.name == "pptx":
+            print("[FAIL] Missing dependency: python-pptx")
+            print("Install it with: python -m pip install python-pptx")
+            return 1
+        raise
     print()
 
     # Timestamped output filenames to avoid lock conflicts

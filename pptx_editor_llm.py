@@ -30,6 +30,45 @@ PPTX 编辑器 — LLM 意图解析 + COM 执行 (Windows Only)
 
 import sys, os, json, argparse, requests
 
+
+def _resolve_note_slide(ppt, slide=None, note_slide=None):
+    """Choose which slide should receive progress notes."""
+    if note_slide is not None:
+        return max(1, min(note_slide, ppt.prs.Slides.Count))
+    if isinstance(slide, int) and 1 <= slide <= ppt.prs.Slides.Count:
+        return slide
+    return 1
+
+
+def _write_progress_note(ppt, message, slide=None, note_slide=None, append=False):
+    """Write or append progress text to speaker notes."""
+    target_slide = _resolve_note_slide(ppt, slide=slide, note_slide=note_slide)
+    if append:
+        return ppt.append_notes(target_slide, message)
+    return ppt.set_notes(target_slide, message)
+
+
+def _build_script_helpers(ppt, note_slide=None):
+    """Expose note logging and sleep helpers inside --exec-script mode."""
+    def log_note(message, slide=None, append=True):
+        return _write_progress_note(
+            ppt,
+            message,
+            slide=slide,
+            note_slide=note_slide,
+            append=append,
+        )
+
+    def sleep(seconds, slide=None, note=None, append=True):
+        import time
+
+        if note:
+            log_note(note, slide=slide, append=append)
+        time.sleep(seconds)
+        return f"等待 {seconds}s"
+
+    return log_note, sleep
+
 # ---------------------------------------------------------------------------
 # LLM 系统提示词
 # ---------------------------------------------------------------------------
@@ -115,6 +154,10 @@ SYSTEM_PROMPT = r"""你是一个 PowerPoint 编辑助手。用户会给你一个
 
 - export_image: 导出幻灯片为图片
   {action:"export_image", slide:1, params:{output_path:"slide1.png", width:1920, height:1080}}
+
+### 工具动作
+- sleep: 等待若干秒，便于 headed 模式下观察修改过程
+    {action:"sleep", params:{seconds:2}}
 
 ## BGR 颜色参考 (COM用BGR，不是RGB!)
 红色=255(0x0000FF), 蓝色=16711680(0xFF0000), 绿色=43520(0x00AA00),
@@ -377,7 +420,8 @@ def _dispatch(ppt, action, slide, target, params):
 # 主流程
 # ---------------------------------------------------------------------------
 def run_single(pptx_path, instruction, output=None, dry_run=False,
-               api_base=None, model=None, api_key=None, headed=False):
+               api_base=None, model=None, api_key=None,
+               headed=False, notes_progress=False, note_slide=None):
     """单次指令模式 (可作为模块调用)"""
     from pptx_editor_com import PowerPointCOM
 
@@ -394,7 +438,22 @@ def run_single(pptx_path, instruction, output=None, dry_run=False,
         if actions is None:
             return False
 
+        if notes_progress and not dry_run:
+            _write_progress_note(
+                ppt,
+                f"执行指令: {instruction}",
+                note_slide=note_slide,
+                append=False,
+            )
+
         ok = execute_actions(ppt, actions, dry_run=dry_run)
+        if ok and notes_progress and not dry_run:
+            _write_progress_note(
+                ppt,
+                f"执行完成: {instruction}",
+                note_slide=note_slide,
+                append=True,
+            )
         if ok and not dry_run:
             ppt.save(output)
         return ok
@@ -402,7 +461,8 @@ def run_single(pptx_path, instruction, output=None, dry_run=False,
         ppt.close()
 
 
-def run_interactive(pptx_path, output=None, api_base=None, model=None, api_key=None, headed=False):
+def run_interactive(pptx_path, output=None, api_base=None, model=None, api_key=None,
+                    headed=False, notes_progress=False, note_slide=None):
     """交互式多轮对话模式"""
     from pptx_editor_com import PowerPointCOM
 
@@ -447,7 +507,23 @@ def run_interactive(pptx_path, output=None, api_base=None, model=None, api_key=N
                 conversation_history.append({"role": "assistant", "content": json.dumps(actions, ensure_ascii=False)})
                 continue
 
+            if notes_progress:
+                _write_progress_note(
+                    ppt,
+                    f"执行指令: {instruction}",
+                    note_slide=note_slide,
+                    append=False,
+                )
+
             execute_actions(ppt, actions)
+
+            if notes_progress:
+                _write_progress_note(
+                    ppt,
+                    f"执行完成: {instruction}",
+                    note_slide=note_slide,
+                    append=True,
+                )
 
             # 记录对话历史
             conversation_history.append({"role": "user", "content": instruction})
@@ -477,6 +553,8 @@ def main():
     parser.add_argument("--model", help="模型名称")
     parser.add_argument("--api-key", help="API 密钥")
     parser.add_argument("--headed", action="store_true", help="以可见窗口模式打开 PowerPoint")
+    parser.add_argument("--notes-progress", action="store_true", help="执行时将当前指令写入演讲者备注")
+    parser.add_argument("--note-slide", type=int, help="将进度备注固定写到指定页")
     args = parser.parse_args()
 
     if not os.path.exists(args.pptx_file):
@@ -512,8 +590,28 @@ def main():
             print(f"🔧 执行脚本: {script_path}")
             with open(script_path, "r", encoding="utf-8") as f:
                 script_code = f.read()
-            exec(script_code, {"ppt": ppt, "filepath": os.path.abspath(args.pptx_file),
-                               "__builtins__": __builtins__})
+            log_note, sleep = _build_script_helpers(ppt, note_slide=args.note_slide)
+            if args.notes_progress:
+                _write_progress_note(
+                    ppt,
+                    f"开始执行脚本: {os.path.basename(script_path)}",
+                    note_slide=args.note_slide,
+                    append=False,
+                )
+            exec(script_code, {
+                "ppt": ppt,
+                "filepath": os.path.abspath(args.pptx_file),
+                "log_note": log_note,
+                "sleep": sleep,
+                "__builtins__": __builtins__,
+            })
+            if args.notes_progress:
+                _write_progress_note(
+                    ppt,
+                    f"脚本执行完成: {os.path.basename(script_path)}",
+                    note_slide=args.note_slide,
+                    append=True,
+                )
             ppt.save(args.output)
             print("✅ 脚本执行完成")
         except Exception as e:
@@ -541,7 +639,21 @@ def main():
             ppt.open(args.pptx_file)
             if args.inspect:
                 pass  # already printed above
+            if args.notes_progress and not args.dry_run:
+                _write_progress_note(
+                    ppt,
+                    f"开始执行动作集: {len(actions)} 个动作",
+                    note_slide=args.note_slide,
+                    append=False,
+                )
             execute_actions(ppt, actions, dry_run=args.dry_run)
+            if args.notes_progress and not args.dry_run:
+                _write_progress_note(
+                    ppt,
+                    f"动作集执行完成: {len(actions)} 个动作",
+                    note_slide=args.note_slide,
+                    append=True,
+                )
             if not args.dry_run:
                 ppt.save(args.output)
         except Exception as e:
@@ -553,7 +665,16 @@ def main():
         return
 
     if args.interactive:
-        run_interactive(args.pptx_file, args.output, api_base, model, api_key, headed=args.headed)
+        run_interactive(
+            args.pptx_file,
+            args.output,
+            api_base,
+            model,
+            api_key,
+            headed=args.headed,
+            notes_progress=args.notes_progress,
+            note_slide=args.note_slide,
+        )
         return
 
     if not args.instruction:
@@ -584,7 +705,21 @@ def main():
             actions = parse_intent_llm(instruction, structure, api_base, model, api_key)
             if actions is None:
                 continue
+            if args.notes_progress and not args.dry_run:
+                _write_progress_note(
+                    ppt,
+                    f"执行指令: {instruction}",
+                    note_slide=args.note_slide,
+                    append=False,
+                )
             execute_actions(ppt, actions, dry_run=args.dry_run)
+            if args.notes_progress and not args.dry_run:
+                _write_progress_note(
+                    ppt,
+                    f"执行完成: {instruction}",
+                    note_slide=args.note_slide,
+                    append=True,
+                )
 
         if not args.dry_run:
             ppt.save(args.output)

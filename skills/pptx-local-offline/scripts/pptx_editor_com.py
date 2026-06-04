@@ -418,6 +418,13 @@ class PowerPointCOM:
         slide.NotesPage.Shapes.Placeholders(2).TextFrame.TextRange.Text = text
         return f"Notes set on slide {slide_idx}"
 
+    def append_notes(self, slide_idx, text, separator="\n"):
+        """Append text to speaker notes for a slide."""
+        current = self.get_notes(slide_idx)
+        next_text = f"{current}{separator}{text}" if current else text
+        self.set_notes(slide_idx, next_text)
+        return f"Notes appended on slide {slide_idx}"
+
     # ---- Comments ----
     def add_comment(self, slide_idx, text, author="Author", x=10, y=10):
         """Add a comment to a slide."""

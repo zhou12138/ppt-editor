@@ -30,8 +30,14 @@ python pptx_editor_llm.py deck.pptx --interactive
 
 本地 Claude Code 等 AI Agent 直接生成 Python 脚本，脚本内可用 `ppt`（已打开的 PowerPointCOM 实例）和 `filepath` 变量。**无需任何 API Key，无需 Ollama。**
 
+现在脚本模式额外内建了两个辅助函数：
+- `log_note("文本", slide=None, append=True)`：把执行进度写到演讲者备注
+- `sleep(seconds, slide=None, note=None, append=True)`：可选先写备注，再等待若干秒
+
 ```bash
 python pptx_editor_llm.py deck.pptx --exec-script edit.py
+python pptx_editor_llm.py deck.pptx --exec-script edit.py --headed
+python pptx_editor_llm.py deck.pptx --exec-script edit.py --notes-progress --note-slide 1
 python pptx_editor_llm.py deck.pptx --exec-script edit.py --output out.pptx
 python pptx_editor_llm.py deck.pptx --inspect --exec-script edit.py
 ```
@@ -39,10 +45,12 @@ python pptx_editor_llm.py deck.pptx --inspect --exec-script edit.py
 Claude 生成的脚本示例：
 ```python
 # edit.py — ppt 和 filepath 已注入为全局变量
+log_note("开始处理第一页标题", slide=1, append=False)
 structure = ppt.inspect()
 shapes = ppt.find_shape(1, {"type": "title"})
 for s in shapes:
     ppt.modify_font(s, bold=True, color=0x0000FF)  # BGR红色
+sleep(1.5, slide=1, note="标题已加粗并改为红色")
 ppt.add_animation(1, shapes[0], "fade")
 ```
 
@@ -53,7 +61,18 @@ Claude 等 AI Agent 生成 JSON actions 数组，跳过 LLM 解析直接 dispatc
 ```bash
 python pptx_editor_llm.py deck.pptx --exec-actions '[{"action":"modify_font","slide":1,"target":{"type":"title"},"params":{"bold":true}}]'
 python pptx_editor_llm.py deck.pptx --exec-actions actions.json
+python pptx_editor_llm.py deck.pptx --exec-actions actions.json --headed --notes-progress
 python pptx_editor_llm.py deck.pptx --exec-actions actions.json --dry-run
+```
+
+JSON actions 也支持等待动作：
+
+```json
+[
+    {"action": "modify_font", "slide": 1, "target": {"type": "title"}, "params": {"bold": true}},
+    {"action": "sleep", "params": {"seconds": 2}},
+    {"action": "animation", "slide": 1, "target": {"type": "title"}, "params": {"effect": "fade"}}
+]
 ```
 
 ### 模式选择指南
@@ -75,6 +94,9 @@ python pptx_editor_llm.py deck.pptx --exec-actions actions.json --dry-run
 | `--api-base` | 覆盖 API 端点 | A |
 | `--model` | 覆盖模型名 | A |
 | `--api-key` | 覆盖 API 密钥 | A |
+| `--headed` | 以可见窗口模式打开 PowerPoint | 全部 |
+| `--notes-progress` | 自动把当前指令或脚本进度写到演讲者备注 | A, B, C |
+| `--note-slide` | 将进度备注固定写到指定页 | A, B, C |
 
 ## 安装配置（所有模式通用）
 
@@ -120,6 +142,7 @@ setx OPENAI_API_KEY "ollama"
 | **BGR 颜色** | COM 使用 BGR 格式！红=0x0000FF，蓝=0xFF0000 |
 | **1-Based 索引** | 所有 COM 索引从 1 开始 |
 | **Session 0 限制** | schtasks 启动的进程无法 Open/SaveAs，需 RDP 桌面会话 |
+| **Notes 进度显示** | `--notes-progress` 默认会覆盖目标备注页当前内容；如需保留历史请在脚本里用 `log_note(..., append=True)` |
 | **内存竞争（模式 A）** | Ollama + PowerPoint 同时运行，建议 16GB+ |
 | **模型质量（模式 A）** | 本地模型不如 GPT-4/Claude，复杂指令可能需多次尝试 |
 
