@@ -89,9 +89,11 @@ def main():
         test("title_align", lambda: p.set_alignment(title(1), "center"))
 
         # Style subtitle
-        test("set_subtitle", lambda: p.modify_text(body(1), "COM Automation PowerShow"))
-        test("subtitle_font", lambda: p.modify_font(body(1), font_size=24, italic=True))
-        test("subtitle_color", lambda: p.modify_font(body(1), color=0x8B7B6B))  # warm gray
+        def sub(n):
+            return p.find_shape(n, {"type": "subtitle"})[0]
+        test("set_subtitle", lambda: p.modify_text(sub(1), "COM Automation PowerShow"))
+        test("subtitle_font", lambda: p.modify_font(sub(1), font_size=24, italic=True))
+        test("subtitle_color", lambda: p.modify_font(sub(1), color=0x8B7B6B))  # warm gray
 
         # Background - gradient dark blue
         test("slide1_bg", lambda: p.set_slide_background(1, 0x4A3A2D))  # dark navy
@@ -284,8 +286,8 @@ def main():
         test("s6_title_font", lambda: p.modify_font(title(6), font_size=52, bold=True, color=0x4A3A2D))
         test("s6_title_align", lambda: p.set_alignment(title(6), "center"))
 
-        test("s6_subtitle", lambda: p.modify_text(body(6), "Built with PPT Editor COM\n70+ methods | Full automation"))
-        test("s6_subtitle_font", lambda: p.modify_font(body(6), font_size=22, color=0x8B7B6B))
+        test("s6_subtitle", lambda: p.modify_text(sub(6), "Built with PPT Editor COM\n70+ methods | Full automation"))
+        test("s6_subtitle_font", lambda: p.modify_font(sub(6), font_size=22, color=0x8B7B6B))
 
         test("s6_bg", lambda: p.set_slide_background(6, 0x4A3A2D))
         test("s6_transition", lambda: p.set_transition(6, "fade", 1.5))
@@ -303,10 +305,11 @@ def main():
 
         # Sections
         test("add_section1", lambda: p.add_section("Introduction", 1))
-        test("add_section2", lambda: p.add_section("Content", 3))
+        test("add_section2", lambda: p.add_section("Content", 2))
         test("get_sections", lambda: f"{len(p.get_sections())} sections")
         test("rename_section", lambda: p.rename_section(1, "Opening"))
-        test("del_sections", lambda: (p.delete_section(2), p.delete_section(1), "cleaned")[2])
+        test("del_section2", lambda: p.delete_section(2))
+        test("del_section1", lambda: p.delete_section(1))
 
         # Layouts & theme info
         test("get_layouts", lambda: f"{len(p.get_slide_layouts())} layouts")
