@@ -246,9 +246,9 @@ def main():
 
     finally:
         if headed:
-            print("\n  [HEADED] PowerPoint kept open for review. Close it manually when done.")
-        else:
-            p.close()
+            print(f"\n  [HEADED] All tests done. Keeping PowerPoint open for 30s...")
+            time.sleep(30)
+        p.close()
 
     # ---- SUMMARY ----
     print("\n" + "=" * 50)
