@@ -81,6 +81,20 @@ def main():
                 try: p.app.ActiveWindow.View.GotoSlide(n)
                 except: pass
 
+        def set_notes_view():
+            """Switch to Normal view with notes pane visible"""
+            if headed:
+                try:
+                    # ppViewNormal=9 shows slides + notes pane
+                    p.app.ActiveWindow.ViewType = 9
+                    # Expand notes pane by adjusting pane height
+                    # Panes(3) is the notes pane in Normal view
+                    p.app.ActiveWindow.Panes(3).Activate()
+                except:
+                    pass
+
+        set_notes_view()
+
         def title(n):
             return p.find_shape(n, {"type": "title"})[0]
 
