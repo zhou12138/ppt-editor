@@ -193,7 +193,14 @@ class PowerPointCOM:
         if "bold" in kw:          tr.Font.Bold = kw["bold"];          ch.append("加粗" if kw["bold"] else "取消加粗")
         if "italic" in kw:        tr.Font.Italic = kw["italic"];      ch.append("斜体")
         if "underline" in kw:     tr.Font.Underline = kw["underline"]; ch.append("下划线" if kw["underline"] else "取消下划线")
-        if "strikethrough" in kw: tr.Font.Strikethrough = -1 if kw["strikethrough"] else 0; ch.append("删除线" if kw["strikethrough"] else "取消删除线")
+        if "strikethrough" in kw:
+            try:
+                for pi in range(1, tr.Paragraphs().Count + 1):
+                    for ri in range(1, tr.Paragraphs(pi).Runs().Count + 1):
+                        tr.Paragraphs(pi).Runs(ri).Font.Strikethrough = -1 if kw["strikethrough"] else 0
+            except Exception:
+                pass  # Strikethrough not supported on all shapes
+            ch.append("删除线" if kw["strikethrough"] else "取消删除线")
         if "color" in kw:         tr.Font.Color.RGB = kw["color"];    ch.append(f"颜色→{hex(kw['color'])}")
         if "font_name" in kw:     tr.Font.Name = kw["font_name"];    ch.append(f"字体→{kw['font_name']}")
         return ", ".join(ch)
@@ -323,7 +330,7 @@ class PowerPointCOM:
 
     # ---- COM 独有: 切换/导出 ----
     def set_transition(self, slide_idx, trans="fade", dur=1.0):
-        tmap = {"fade":3849, "push":3336, "wipe":769, "split":3073, "none":0, "dissolve":1537, "cut":257}
+        tmap = {"fade":3849, "wipe":769, "split":3073, "none":0, "dissolve":1537, "cut":257, "push":3334, "cover":1025, "uncover":1793, "random":513}
         s = self.prs.Slides(slide_idx)
         s.SlideShowTransition.EntryEffect = tmap.get(trans, 2745)
         s.SlideShowTransition.Duration = dur
