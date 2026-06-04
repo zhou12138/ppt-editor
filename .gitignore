@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 *_modified.pptx
 *_structure.json
+*.pptx
+!skills/**/*.pptx

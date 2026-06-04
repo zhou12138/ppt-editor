@@ -15,6 +15,9 @@ from pptx_editor_com import PowerPointCOM
 passed = 0
 failed = 0
 errors = []
+current_slide = [0]  # mutable for closure
+slide_comment_idx = {}  # {slide_num: next_y_offset}
+ppt_ref = [None]  # ref to PowerPointCOM for comment writing
 
 def test(name, fn):
     global passed, failed
@@ -22,16 +25,36 @@ def test(name, fn):
     try:
         result = fn()
         passed += 1
+        detail = ""
         msg = f"OK"
         if result and isinstance(result, str) and len(result) < 80:
             msg += f" ({result})"
+            detail = result
         print(msg)
+        # Write comment immediately
+        _write_comment(name, "✅", detail)
         if DELAY > 0:
             time.sleep(DELAY)
     except Exception as e:
         failed += 1
         errors.append((name, str(e)))
         print(f"FAIL: {e}")
+        _write_comment(name, "❌", str(e)[:60])
+
+def _write_comment(name, status, detail):
+    sn = current_slide[0]
+    p = ppt_ref[0]
+    if sn <= 0 or p is None:
+        return
+    text = f"{status} {name}"
+    if detail:
+        text += f" → {detail}"
+    y = slide_comment_idx.get(sn, 10)
+    try:
+        p.add_comment(sn, text, "DemoTest", 10, y)
+        slide_comment_idx[sn] = y + 25
+    except:
+        pass
 
 def main():
     global passed, failed
@@ -48,6 +71,7 @@ def main():
     p = PowerPointCOM(visible=headed)
     try:
         p.open("test_report.pptx")
+        ppt_ref[0] = p
 
         # Helpers
         def goto(n):
@@ -77,6 +101,7 @@ def main():
         # SLIDE 1: Title Page - Professional styling
         # ============================================================
         print("\n--- Slide 1: Title Page ---")
+        current_slide[0] = 1
         goto(1)
 
         # Inspect
@@ -114,6 +139,7 @@ def main():
         # SLIDE 2: Feature List - Enhanced typography
         # ============================================================
         print("\n--- Slide 2: Feature Overview ---")
+        current_slide[0] = 2
         goto(2)
 
         test("s2_title", lambda: p.modify_text(title(2), "What Can It Do?"))
@@ -148,6 +174,7 @@ def main():
         # SLIDE 3: Data Table - Professional formatting
         # ============================================================
         print("\n--- Slide 3: Performance Table ---")
+        current_slide[0] = 3
         goto(3)
 
         test("s3_title", lambda: p.modify_text(title(3), "Q2 Performance Dashboard"))
@@ -179,6 +206,7 @@ def main():
         # SLIDE 4: Chart & Shapes - Data visualization
         # ============================================================
         print("\n--- Slide 4: Data Visualization ---")
+        current_slide[0] = 4
         goto(4)
 
         # Add chart
@@ -218,6 +246,7 @@ def main():
         # SLIDE 5: Visual Effects Showcase
         # ============================================================
         print("\n--- Slide 5: Visual Effects ---")
+        current_slide[0] = 5
         goto(5)
 
         # Add styled boxes to demonstrate effects
@@ -280,6 +309,7 @@ def main():
         # SLIDE 6: Thank You - clean closing
         # ============================================================
         print("\n--- Slide 6: Thank You ---")
+        current_slide[0] = 6
         goto(6)
 
         test("s6_title", lambda: p.modify_text(title(6), "Thank You!"))
@@ -297,6 +327,7 @@ def main():
         # CROSS-SLIDE OPS
         # ============================================================
         print("\n--- Cross-slide Operations ---")
+        current_slide[0] = 0
 
         # Comments
         test("add_comment", lambda: p.add_comment(1, "Great title design!", "Reviewer", 100, 50))
