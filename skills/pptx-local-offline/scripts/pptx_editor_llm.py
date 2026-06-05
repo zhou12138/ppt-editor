@@ -28,7 +28,7 @@ PPTX 编辑器 — LLM 意图解析 + COM 执行 (Windows Only)
   OPENAI_MODEL         模型名 (默认 gpt-4o)
 """
 
-import sys, os, json, argparse, requests
+import sys, os, json, argparse
 
 from ppt_backend import add_backend_arguments, create_backend
 
@@ -619,6 +619,7 @@ def get_api_config(args=None):
 
 def call_llm(messages, api_base, model, api_key, temperature=0.0):
     """调用 OpenAI-compatible chat completion API"""
+    import requests  # lazy: only the LLM mode needs it (keeps _dispatch importable in-process)
     url = f"{api_base}/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:

@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 try:
     import win32com.client
@@ -18,7 +19,7 @@ except Exception:
     pass
 
 
-SUPPORTED_BACKENDS = ("pywin32", "vba", "csharp")
+SUPPORTED_BACKENDS = ("pywin32", "vba", "csharp", "csharp-addin", "pywin32-addin")
 
 
 def add_backend_arguments(parser):
@@ -45,6 +46,10 @@ def create_backend(name="pywin32", visible=False, vba_module="PptEditorBridge", 
         return PowerPointVBA(visible=visible, macro_module=vba_module)
     if backend == "csharp":
         return PowerPointCSharp(visible=visible, host_exe=csharp_host)
+    if backend == "csharp-addin":
+        return PowerPointCSharpAddin(visible=visible)
+    if backend == "pywin32-addin":
+        return PowerPointPywin32Addin(visible=visible)
     raise ValueError(f"不支持的 backend: {name}")
 
 
@@ -196,6 +201,243 @@ class PowerPointCSharp:
 
     def execute_action(self, action_payload):
         return self._rpc({"cmd": "execute_action", "action": action_payload})
+
+
+def _resolve_powerpnt_exe():
+    """Locate POWERPNT.EXE for launching an interactive PowerPoint instance
+    (required so the in-process C# COM add-in loads — automation/DispatchEx does
+    NOT auto-load COM add-ins)."""
+    env = os.environ.get("PPTX_EDITOR_POWERPNT")
+    if env and os.path.isfile(env):
+        return env
+    candidates = [
+        r"C:\Program Files\Microsoft Office\root\Office16\POWERPNT.EXE",
+        r"C:\Program Files (x86)\Microsoft Office\root\Office16\POWERPNT.EXE",
+        r"C:\Program Files\Microsoft Office\Office16\POWERPNT.EXE",
+        r"C:\Program Files (x86)\Microsoft Office\Office16\POWERPNT.EXE",
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return None
+
+
+class PowerPointCSharpAddin:
+    """PowerPoint backend driven by an IN-PROCESS C# COM add-in.
+
+    Unlike PowerPointCSharp (out-of-process exe host) and pywin32 (out-of-process
+    automation), this backend runs the editing logic *inside* POWERPNT.EXE via a
+    COM add-in, exactly like VBA — so the PowerPoint object model is touched with
+    zero cross-process marshalling. The Python driver makes ONE coarse cross-process
+    call per operation (InspectJson / InspectSlideJson / ExecuteActionJson) and all
+    per-shape traversal happens in-process.
+
+    PowerPoint COM add-ins only load under an *interactive* launch (automation /
+    DispatchEx refuses to connect them), so this backend launches POWERPNT.EXE with
+    the deck and attaches via GetActiveObject."""
+
+    PROGID = "PptEditor.AddIn"
+
+    def __init__(self, visible=True, powerpnt_exe=None):
+        if win32com is None or pythoncom is None:
+            print("❌ pip install pywin32 (Windows + Office required)")
+            sys.exit(1)
+        pythoncom.CoInitialize()
+        self.exe = powerpnt_exe or _resolve_powerpnt_exe()
+        if not self.exe:
+            raise RuntimeError(
+                "找不到 POWERPNT.EXE。请用环境变量 PPTX_EDITOR_POWERPNT 指定路径。"
+            )
+        self.app = None
+        self.proc = None
+        self.prs = None
+        self.filepath = None
+        self._bridge = None
+
+    def _ensure_bridge(self):
+        if self._bridge is not None:
+            return self._bridge
+        try:
+            addin = self.app.COMAddIns.Item(self.PROGID)
+        except Exception as exc:
+            raise RuntimeError(
+                f"C# add-in 未注册 ({self.PROGID})。请先注册:\n"
+                f"  powershell -ExecutionPolicy Bypass -File csharp_addin/register.ps1\n"
+                f"原始错误: {exc}"
+            ) from exc
+        try:
+            if not addin.Connect:
+                addin.Connect = True
+        except Exception:
+            pass
+        bridge = addin.Object
+        if bridge is None:
+            raise RuntimeError(
+                "C# add-in 已注册但未连接 (COMAddIn.Object 为空)。"
+                "请确认以交互方式启动 PowerPoint，并已构建 csharp_addin。"
+            )
+        self._bridge = bridge
+        return bridge
+
+    def open(self, path):
+        self.filepath = os.path.abspath(path)
+        # Interactive launch so the COM add-in loads in-process.
+        self.proc = subprocess.Popen([self.exe, self.filepath])
+        # Attach to the interactive instance and wait until the deck is fully
+        # loaded. GetActiveObject can succeed before the presentation window is
+        # ready (ActivePresentation then raises "no active presentation"), so we
+        # gate on being able to read Presentations.Item(1).Slides.Count.
+        for _ in range(90):
+            try:
+                if self.app is None:
+                    self.app = win32com.client.GetActiveObject("PowerPoint.Application")
+                if int(self.app.Presentations.Count) >= 1:
+                    cand = self.app.Presentations.Item(1)
+                    _ = int(cand.Slides.Count)  # confirm fully loaded
+                    self.prs = cand
+                    break
+            except Exception:
+                self.app = None
+            time.sleep(1)
+        if self.prs is None:
+            raise RuntimeError(
+                "无法连接到交互式 PowerPoint 实例或演示文稿未就绪 (启动超时)。"
+            )
+        self._ensure_bridge()
+        print(f"📂 已打开: {self.filepath} ({int(self.prs.Slides.Count)}页)")
+        return self
+
+    def close(self):
+        try:
+            if self.prs is not None:
+                self.prs.Saved = True
+                self.prs.Close()
+        except Exception:
+            pass
+        try:
+            if self.app is not None:
+                self.app.Quit()
+        except Exception:
+            pass
+        try:
+            if self.proc is not None:
+                self.proc.terminate()
+        except Exception:
+            pass
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+    def _get_save_format(self, path):
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".pptx":
+            return 24
+        if ext == ".ppt":
+            return 1
+        return None
+
+    def save(self, out=None):
+        path = os.path.abspath(out) if out else self.filepath
+        fmt = self._get_save_format(path)
+        if fmt is None:
+            self.prs.SaveAs(path)
+        else:
+            self.prs.SaveAs(path, fmt)
+        print(f"💾 已另存为: {out}" if out else "💾 已保存")
+
+    def inspect(self):
+        raw = self._ensure_bridge().InspectJson
+        return json.loads(raw) if raw else {"slides": []}
+
+    def inspect_slide(self, slide):
+        raw = self._ensure_bridge().InspectSlideJson(int(slide))
+        return json.loads(raw) if raw else {"slides": []}
+
+    def print_structure(self, desc):
+        for slide in desc.get("slides", []):
+            print(f"\n{'=' * 50}\n📄 第 {slide['index']} 页 ({slide.get('layout', '')})\n{'=' * 50}")
+            for idx, element in enumerate(slide.get("elements", []), 1):
+                ph = f" [{element.get('ph_type_name','')}]" if element.get("is_placeholder") else ""
+                labels = []
+                if element.get("has_image"):
+                    labels.append("[图片]")
+                if element.get("has_chart"):
+                    labels.append("[图表]")
+                if element.get("has_table"):
+                    labels.append("[表格]")
+                if element.get("has_media"):
+                    labels.append("[媒体]")
+                txt = (element.get("text") or " ".join(labels) or "(无)")[:40].replace("\n", "↵")
+                print(
+                    f"  [{idx}] [{element.get('id')}] {element.get('name')}{ph} "
+                    f"({element.get('position_label', '')}) → {txt}"
+                )
+
+    def set_notes(self, slide, text):
+        return self.execute_action(
+            {"action": "set_notes", "slide": int(slide), "params": {"text": text}}
+        )
+
+    def append_notes(self, slide, text, separator="\n"):
+        return self.execute_action(
+            {"action": "append_notes", "slide": int(slide), "params": {"text": text, "separator": separator}}
+        )
+
+    def execute_action(self, action_payload):
+        return self._ensure_bridge().ExecuteActionJson(
+            json.dumps(action_payload, ensure_ascii=False)
+        )
+
+
+class PowerPointPywin32Addin(PowerPointCSharpAddin):
+    """PowerPoint backend driven by an IN-PROCESS *Python* (pywin32) COM add-in.
+
+    The in-process twin of the pywin32 backend and the Python counterpart of
+    PowerPointCSharpAddin: identical interactive-launch + GetActiveObject +
+    COMAddIns.Item(ProgId).Object bridging, but the in-process logic is pure
+    Python (pptx_pyaddin.py reusing PowerPointCOM + _dispatch). Proves the
+    pywin32 slowness was the cross-process IPC, not the language.
+
+    The only behavioural difference vs the C# add-in: the bridge object is a
+    pywin32 COM server, so InspectJson / InspectSlideJson are METHODS (called
+    with parentheses), not C# parameterless-property getters.
+    """
+
+    PROGID = "PptEditor.PyAddIn"
+
+    def _ensure_bridge(self):
+        if self._bridge is not None:
+            return self._bridge
+        try:
+            addin = self.app.COMAddIns.Item(self.PROGID)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Python add-in 未注册 ({self.PROGID})。请先注册:\n"
+                f"  python pptx_pyaddin.py\n"
+                f"原始错误: {exc}"
+            ) from exc
+        try:
+            if not addin.Connect:
+                addin.Connect = True
+        except Exception:
+            pass
+        bridge = addin.Object
+        if bridge is None:
+            raise RuntimeError(
+                "Python add-in 已注册但未连接 (COMAddIn.Object 为空)。"
+                "请确认以交互方式启动 PowerPoint，并已安装 pywin32。"
+            )
+        self._bridge = bridge
+        return bridge
+
+    def inspect(self):
+        raw = self._ensure_bridge().InspectJson()
+        return json.loads(raw) if raw else {"slides": []}
+
+    def inspect_slide(self, slide):
+        raw = self._ensure_bridge().InspectSlideJson(int(slide))
+        return json.loads(raw) if raw else {"slides": []}
 
 
 class PowerPointVBA:

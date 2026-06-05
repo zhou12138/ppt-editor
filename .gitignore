@@ -13,3 +13,6 @@ opt/
 # C# Interop host build artifacts
 csharp_interop/**/bin/
 csharp_interop/**/obj/
+
+csharp_addin/**/bin/
+csharp_addin/**/obj/

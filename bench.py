@@ -1,6 +1,20 @@
 """
-Benchmark: pywin32 vs VBA vs C# Interop backend (single-backend mode)
-Run: python bench.py pywin32  /  python bench.py vba  /  python bench.py csharp
+Benchmark: pywin32 vs VBA vs C# Interop (exe) vs C# add-in vs Python add-in.
+
+Five backends arranged as a (Python / C#) x (out-of-process / in-process) matrix
+(VBA is the in-process reference point):
+  - OUT-of-process (cross-process COM marshalling per op):
+        pywin32       -> python.exe  driving PowerPoint over COM
+        csharp        -> C# exe host driving PowerPoint over COM
+  - IN-process (zero cross-process marshalling; logic runs inside POWERPNT.EXE):
+        vba           -> VBA macro bridge
+        csharp-addin  -> C# COM add-in bridge (early-bound interop)
+        pywin32-addin -> Python (pywin32) COM add-in bridge
+
+The matrix isolates the variable: same language, in-proc vs out-proc, shows the
+cross-process IPC — not the language — is what made pywin32 slow.
+
+Run: python bench.py pywin32 | vba | csharp | csharp-addin | pywin32-addin
 """
 import sys, os, time, json
 

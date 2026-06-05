@@ -45,7 +45,19 @@ python pptx_editor_llm.py deck.pptx --interactive
 
 本地 Claude Code 等 AI Agent 直接生成 Python 脚本，脚本内可用 `ppt`（已打开的 PowerPointCOM 实例）和 `filepath` 变量。**无需任何 API Key，无需 Ollama。**
 
-底层执行策略现在支持通过 `--backend pywin32|vba` 切换。默认是 `pywin32`。`vba` 策略会通过 `Application.Run` 调用 VBA 桥接宏，适合已有宏工程或准备把动作下沉到 VBA 的场景。当前 `vba` 策略推荐搭配 `--exec-actions` / `--interactive-actions` 使用；`--exec-script` 仍然只支持 Python。
+底层执行策略现在支持通过 `--backend pywin32|vba|csharp|csharp-addin|pywin32-addin` 切换。默认是 `pywin32`。五种策略构成「Python / C#」×「跨进程 / 进程内」的完整对照矩阵（VBA 作为进程内参照基准），主要用于性能对比，证明瓶颈在跨进程 IPC 而非语言本身：
+- `pywin32`：跨进程后期绑定 COM（基线，Python × 跨进程）。
+- `vba`：进程内 VBA 桥接宏（`Application.Run`），最快，进程内参照基准。
+- `csharp`：跨进程常驻 C# host（exe，JSON-RPC），与 pywin32 同机制但换 C#（C# × 跨进程）。
+- `csharp-addin`：**进程内** C# COM 加载项，运行在 POWERPNT.EXE 内（与 VBA 同机制，早绑定 interop），需先注册（见下文）（C# × 进程内）。
+- `pywin32-addin`：**进程内** Python（pywin32）COM 加载项，同样运行在 POWERPNT.EXE 内，复用同一套 `PowerPointCOM` 引擎，需先注册（见下文）（Python × 进程内）。
+
+> 矩阵说明：`pywin32`（Python/跨进程）与 `pywin32-addin`（Python/进程内）是同语言、仅执行位置不同的对照组；`csharp` 与 `csharp-addin` 同理。两组同时变快即可隔离出真正的变量——是跨进程 COM marshalling（IPC）而非 Python/C# 语言差异拖慢了 `pywin32`。
+
+`vba` 策略会通过 `Application.Run` 调用 VBA 桥接宏，适合已有宏工程或准备把动作下沉到 VBA 的场景。当前 `vba` / `csharp` / `csharp-addin` / `pywin32-addin` 策略推荐搭配 `--exec-actions` / `--interactive-actions` 使用；`--exec-script` 仍然只支持 Python。
+
+> 两个进程内加载项（`csharp-addin` / `pywin32-addin`）与 VBA 一样，只在**交互式桌面会话**启动的 PowerPoint 里加载（PowerPoint 不会在无人值守 / 服务会话里加载加载项）。注册见下文「进程内加载项注册」。
+
 
 `vba` 策略现在依赖 skill 内置的 `references/JsonConverter.bas`。它不是可选工具，而是 VBA backend 的 JSON 桥接组件：
 - `ExecuteActionJson()` 用它把 Python 传来的 action JSON 解析成 VBA 可操作的 `Dictionary` / `Collection`
@@ -159,7 +171,7 @@ JSON 会话模式会保持同一个 COM 会话，持续从 stdin 读取命令。
 | `--headed` | 以可见窗口模式打开 PowerPoint | 全部 |
 | `--notes-progress` | 自动把当前指令或脚本进度写到演讲者备注 | A, B, C |
 | `--note-slide` | 将进度备注固定写到指定页 | A, B, C |
-| `--backend` | 选择底层策略：`pywin32` 或 `vba` | B, C |
+| `--backend` | 选择底层策略：`pywin32` / `vba` / `csharp` / `csharp-addin` / `pywin32-addin` | B, C |
 | `--vba-module` | 指定 VBA 桥接宏模块名，默认 `PptEditorBridge` | B, C |
 
 ## Backend 性能对比
@@ -224,7 +236,7 @@ JSON 会话模式会保持同一个 COM 会话，持续从 stdin 读取命令。
 ## C# Interop backend（`--backend csharp`）
 
 第三种执行策略：一个常驻的 C# 进程用**后期绑定 COM（dynamic / IDispatch，与 pywin32 同机制）**驱动 PowerPoint，
-通过 stdin/stdout 的 **行分隔 JSON-RPC** 与 Python 通信。主要用于 pywin32 / VBA / C# 三方性能对比。
+通过 stdin/stdout 的 **行分隔 JSON-RPC** 与 Python 通信。主要用于 pywin32 / VBA / C# 四方性能对比（另一路是进程内的 `csharp-addin`，见下节）。
 
 > 它是一个**可执行 host（exe），不是注册的 COM dll** —— 无需 regsvr32，不写注册表。
 
@@ -270,7 +282,89 @@ Python 侧 `PowerPointCSharp` 会自动定位 exe，查找顺序：
 
 > ⚠️ 颜色仍是 **BGR**（红=255/0xFF）；索引 **1-based**；PowerPoint 不允许 `Application.Visible=false`，host 已自动用无窗口方式打开演示文稿。
 
+## C# in-process add-in backend（`--backend csharp-addin`）
+
+第四种执行策略：一个 **进程内（in-process）的 C# COM 加载项**，被 PowerPoint 在启动时加载、运行在 `POWERPNT.EXE` 进程**内部**——和 VBA 同机制，**零跨进程 IPC**。
+用于证明「VBA 的速度优势来自进程内 COM 访问，而非语言本身」：把语言固定为 C#、只改变进程边界（`csharp` exe host 是跨进程，`csharp-addin` 是进程内），即可隔离 IPC 这一变量。
+
+> 它是一个**注册到 HKCU 的 COM dll 加载项**（不是 exe host）。PowerPoint **只在交互式启动时**加载加载项；自动化/`DispatchEx` 强制 connect 会被 PowerPoint 策略拒绝（E_ABORT）。因此 Python backend 会以交互方式拉起 `POWERPNT.EXE deck.pptx`，再通过 `Application.COMAddIns` 拿到桥接对象。
+
+### 安装 / 注册（每用户，无需管理员）
+
+`install-local-offline-skill.ps1` 会在安装时自动完成构建 + 部署 + 注册：
+
+```powershell
+# 默认：构建 net48 加载项，复制到 <skill>/csharp_addin/，并写入 HKCU 注册项（LoadBehavior=3）
+powershell -File install-local-offline-skill.ps1
+
+# 跳过所有 C# backend（exe host + 加载项）：
+powershell -File install-local-offline-skill.ps1 -SkipCSharp
+
+# 部署但不写注册表（之后手动注册）：
+powershell -File install-local-offline-skill.ps1 -SkipAddinRegister
+```
+
+安装脚本把构建产物（`PptEditorAddin.dll` + `Newtonsoft.Json.dll`）放进 `<skill>/csharp_addin/`，并复制 `register.ps1` / `unregister.ps1` 到同目录。注册写入的 `CodeBase` 指向**部署后的 DLL 绝对路径**，因此在每台目标机上独立可用。
+
+手动（重新）注册 / 反注册：
+
+```powershell
+powershell -File "<skill>\csharp_addin\register.ps1"   -DllPath "<skill>\csharp_addin\PptEditorAddin.dll"
+powershell -File "<skill>\csharp_addin\unregister.ps1"
+```
+
+### 使用
+
+```powershell
+python scripts/pptx_editor_llm.py deck.pptx --inspect --backend csharp-addin
+```
+
+Python 侧 `PowerPointCSharpAddin` 通过 `PPTX_EDITOR_POWERPNT`（或自动探测 Office16 路径）定位 `POWERPNT.EXE`，交互式打开演示文稿后从 `Application.COMAddIns.Item("PptEditor.AddIn").Object` 取得进程内桥接对象。桥接方法（`InspectJson` / `InspectSlideJson` / `ExecuteActionJson`）的 `action` 负载与 VBA / C# host **完全一致**。
+
+> ⚠️ 加载项依赖 **.NET Framework 4.8 运行时**（Office 机器通常自带）与 **dotnet SDK**（仅安装时构建用）。若目标机无 dotnet，可在有 dotnet 的机器构建后，把 `csharp_addin/` 整目录拷过去再跑 `register.ps1 -DllPath ...`。颜色仍是 **BGR**、索引 **1-based**。
+
+> 早绑定说明：加载项已改为**早绑定 interop**（直接引用 GAC 中的 Office PIA 并 `EmbedInteropTypes=true`），不再用 `dynamic`。每个 PowerPoint 调用都在编译期类型检查，并走 vtable 调用，比 late-bound `dynamic` 更快、更安全；输出 DLL 自包含，无需随附 interop 程序集。
+
+## Python in-process add-in backend（`--backend pywin32-addin`）
+
+第五种执行策略：一个 **进程内（in-process）的 Python（pywin32）COM 加载项**，被 PowerPoint 在启动时加载、运行在 `POWERPNT.EXE` 进程**内部**——和 VBA / C# 加载项同机制，**零跨进程 IPC**。
+
+这一格补全了 「Python / C#」×「跨进程 / 进程内」对照矩阵的最后一个单元：
+
+| | 跨进程（out-of-proc） | 进程内（in-proc） |
+|---|---|---|
+| **Python** | `pywin32`（基线） | `pywin32-addin` |
+| **C#** | `csharp`（exe host） | `csharp-addin` |
+| **VBA** | — | `vba`（参照基准） |
+
+把语言固定为 Python、只改变进程边界（`pywin32` 跨进程 vs `pywin32-addin` 进程内），即可与 C# 那一行平行地验证：**真正拖慢 `pywin32` 的是跨进程 COM marshalling（IPC），不是 Python 语言本身。**
+
+> 它通过 pywin32 把自身注册为实现 `IDTExtensibility2` 的进程内 COM server，由 64 位 `POWERPNT.EXE` 在启动时加载（需 64 位 Python + pywin32）。它**复用同一套 `PowerPointCOM` 引擎**：加载项在 PowerPoint 进程内用 `ActivePresentation` 绑定当前演示文稿，因此不会再起第二个 PowerPoint。与 C# 加载项一样，只在**交互式桌面会话**加载。
+
+### 安装 / 注册（每用户，无需管理员）
+
+`install-local-offline-skill.ps1` 会在注册 C# 加载项之后，自动注册 Python 加载项（写入 HKCU `...\PowerPoint\Addins\PptEditor.PyAddIn`，LoadBehavior=3）。`-SkipAddinRegister` 会同时跳过两个加载项的注册。
+
+手动（重新）注册 / 反注册：
+
+```powershell
+python "<skill>\scripts\pptx_pyaddin.py"              # 注册 COM server + HKCU 加载项
+python "<skill>\scripts\pptx_pyaddin.py" --unregister # 反注册
+python "<skill>\scripts\pptx_pyaddin.py" --clean      # 反注册并清理
+```
+
+### 使用
+
+```powershell
+python scripts/pptx_editor_llm.py deck.pptx --inspect --backend pywin32-addin
+```
+
+Python 侧 `PowerPointPywin32Addin`（继承自 `PowerPointCSharpAddin`）以交互方式拉起 `POWERPNT.EXE deck.pptx`，再从 `Application.COMAddIns.Item("PptEditor.PyAddIn").Object` 取得进程内桥接对象。桥接方法（`InspectJson()` / `InspectSlideJson(i)` / `ExecuteActionJson(json)`）的 `action` 负载与 VBA / C# 完全一致。
+
+> ⚠️ 依赖 **64 位 Python + pywin32**。`set_notes` / `append_notes` 在加载项内直接走引擎方法；其余 action 走 `_dispatch`。颜色仍是 **BGR**、索引 **1-based**。
+
 ## 安装配置（所有模式通用）
+
 
 ```powershell
 pip install pywin32
