@@ -49,11 +49,15 @@ class PowerPointVBA:
             sys.exit(1)
         pythoncom.CoInitialize()
         self.app = win32com.client.Dispatch("PowerPoint.Application")
+        self.app.AutomationSecurity = 1  # msoAutomationSecurityLow
         if visible:
             self.app.Visible = True
         self.prs = None
         self.filepath = None
         self.macro_module = macro_module
+        self._references_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), os.pardir, "references"
+        )
 
     def _run_macro(self, macro_name, *args):
         try:
@@ -74,8 +78,33 @@ class PowerPointVBA:
         self.filepath = os.path.abspath(path)
         with_window = self.app.Visible
         self.prs = self.app.Presentations.Open(self.filepath, False, False, with_window)
+        self._ensure_vba_modules()
         print(f"📂 已打开: {self.filepath} ({self.prs.Slides.Count}页)")
         return self
+
+    def _ensure_vba_modules(self):
+        """Auto-import PptEditorBridge.bas and JsonConverter.bas if missing."""
+        required = ["JsonConverter", self.macro_module]
+        vba = self.prs.VBProject
+        existing = set()
+        for i in range(1, vba.VBComponents.Count + 1):
+            existing.add(vba.VBComponents.Item(i).Name)
+
+        for mod_name in required:
+            if mod_name in existing:
+                continue
+            bas_path = os.path.join(self._references_dir, f"{mod_name}.bas")
+            if not os.path.isfile(bas_path):
+                print(f"⚠️  找不到 VBA 模块: {bas_path}")
+                continue
+            try:
+                vba.VBComponents.Import(bas_path)
+                print(f"📥 自动导入 VBA 模块: {mod_name}")
+            except Exception as exc:
+                print(
+                    f"⚠️  导入 {mod_name} 失败: {exc}\n"
+                    f"   请在 PowerPoint Trust Center 中启用 'Trust access to the VBA project object model'"
+                )
 
     def close(self):
         try:
