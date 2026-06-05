@@ -18,6 +18,7 @@ import sys, os, re, json
 
 try:
     import win32com.client
+    import win32com.client.gencache
     import pythoncom
 except ImportError:
     print("❌ pip install pywin32 (Windows + Office required)")
@@ -40,7 +41,12 @@ PH_NAMES = {1:"TITLE",2:"BODY",3:"CENTER_TITLE",4:"SUBTITLE",7:"OBJECT",
 class PowerPointCOM:
     def __init__(self, visible=False):
         pythoncom.CoInitialize()
-        self.app = win32com.client.Dispatch("PowerPoint.Application")
+        # Early binding (gencache) is ~5x faster for property-heavy inspect;
+        # fall back to late binding if the type-library cache can't be built.
+        try:
+            self.app = win32com.client.gencache.EnsureDispatch("PowerPoint.Application")
+        except Exception:
+            self.app = win32com.client.Dispatch("PowerPoint.Application")
         if visible: self.app.Visible = True
         self.prs = None
 

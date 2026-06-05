@@ -106,7 +106,14 @@ internal static class Program
                 return InspectSlide(GetInt(req, "slide", 1));
 
             case "execute_action":
-                return ExecuteAction(req.GetProperty("action"));
+                // Accept both the nested form {"action":{...}} (Python backend) and
+                // the flat form {"action":"modify_font","slide":1,...} (manual / other clients).
+                if (req.TryGetProperty("action", out JsonElement act) && act.ValueKind == JsonValueKind.Object)
+                {
+                    return ExecuteAction(act);
+                }
+
+                return ExecuteAction(req);
 
             case "set_notes":
                 return SetNotes(GetInt(req, "slide", 1), GetStr(req, "text", ""));

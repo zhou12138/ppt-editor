@@ -275,6 +275,17 @@ class PowerPointVBA:
             return data
         return raw
 
+    def inspect_slide(self, slide):
+        raw = self._run_macro("InspectSlideJson", int(slide))
+        if not raw:
+            return {"slides": []}
+        if isinstance(raw, str):
+            data = json.loads(raw)
+            if isinstance(data, dict) and data.get("error"):
+                raise RuntimeError(f"VBA backend inspect_slide 失败: {data['error']}")
+            return data
+        return raw
+
     def print_structure(self, desc):
         for slide in desc.get("slides", []):
             print(f"\n{'=' * 50}\n📄 第 {slide['index']} 页 ({slide.get('layout', '')})\n{'=' * 50}")

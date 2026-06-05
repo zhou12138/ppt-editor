@@ -111,6 +111,9 @@ Private Function ParseString() As String
                 Case "n": result = result & vbLf
                 Case "r": result = result & vbCr
                 Case "t": result = result & vbTab
+                Case "u"
+                    result = result & ChrW$(CLng("&H" & Mid$(jsonText, jsonIndex, 4)))
+                    jsonIndex = jsonIndex + 4
                 Case Else: Err.Raise vbObjectError + 3001, "JsonConverter", "Unsupported escape sequence: \" & ch
             End Select
         Else
