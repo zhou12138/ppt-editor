@@ -145,7 +145,9 @@ class PowerPointCOM:
             try: sd["layout"] = slide.CustomLayout.Name
             except: sd["layout"] = str(slide.Layout)
             
-            for shape in slide.Shapes:
+            # 按索引遍历，避免 COM 枚举器在大文件(上百 shape)上失效导致 RPC 断连
+            for shape_idx in range(1, slide.Shapes.Count + 1):
+                shape = slide.Shapes(shape_idx)
                 e = {"id": shape.Id, "name": shape.Name, "type": shape.Type,
                      "left": round(shape.Left,1), "top": round(shape.Top,1),
                      "width": round(shape.Width,1), "height": round(shape.Height,1),
@@ -270,6 +272,11 @@ class PowerPointCOM:
         return f"部分文本: '{old}' → '{new_text}'"
 
     def modify_font(self, shape, **kw):
+        try:
+            if not shape.HasTextFrame:
+                return f"跳过 [{shape.Name}] (无文本框)"
+        except Exception:
+            return f"跳过 [{shape.Name}] (无文本框)"
         tr = shape.TextFrame.TextRange
         ch = []
         if "font_size" in kw:       tr.Font.Size = kw["font_size"];       ch.append(f"字号→{kw['font_size']}")
@@ -295,6 +302,11 @@ class PowerPointCOM:
 
     def set_alignment(self, shape, align):
         """设置段落对齐: 左=1, 居中=2, 右=3, 两端=4"""
+        try:
+            if not shape.HasTextFrame:
+                return f"跳过 [{shape.Name}] (无文本框)"
+        except Exception:
+            return f"跳过 [{shape.Name}] (无文本框)"
         align_map = {"左": 1, "left": 1, "居中": 2, "center": 2, "右": 3, "right": 3, "两端": 4, "justify": 4}
         val = align_map.get(align, align) if isinstance(align, str) else align
         for pi in range(1, shape.TextFrame.TextRange.Paragraphs().Count + 1):

@@ -9,6 +9,13 @@ except ImportError:
     win32com = None
     pythoncom = None
 
+# 避免 emoji/中文输出在非 UTF-8 终端或 subprocess 下抛 UnicodeEncodeError
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 
 SUPPORTED_BACKENDS = ("pywin32", "vba")
 

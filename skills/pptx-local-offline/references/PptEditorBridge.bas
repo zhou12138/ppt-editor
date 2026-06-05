@@ -50,6 +50,42 @@ ErrHandler:
     InspectPresentationJson = BuildMacroErrorJson("InspectPresentationJson", Err)
 End Function
 
+' Inspect a single slide only — avoids full-deck cost when caller needs one page.
+Public Function InspectSlideJson(ByVal slideIndex As Long) As String
+    On Error GoTo ErrHandler
+    Dim prs As Presentation
+    Dim result As Object
+    Dim slidesArr As Collection
+    Dim slideObj As Object
+    Dim elementsArr As Collection
+    Dim sld As Slide
+    Dim shp As Shape
+
+    Set prs = ActivePresentation
+    Set result = CreateObject("Scripting.Dictionary")
+    Set slidesArr = New Collection
+
+    Set sld = prs.Slides(slideIndex)
+    Set slideObj = CreateObject("Scripting.Dictionary")
+    slideObj("index") = CLng(sld.SlideIndex)
+    slideObj("layout") = GetSlideLayoutName(sld)
+
+    Set elementsArr = New Collection
+    For Each shp In sld.Shapes
+        elementsArr.Add InspectShape(prs, shp)
+    Next shp
+
+    Set slideObj("elements") = elementsArr
+    slidesArr.Add slideObj
+
+    Set result("slides") = slidesArr
+    InspectSlideJson = JsonConverter.ConvertToJson(result)
+    Exit Function
+
+ErrHandler:
+    InspectSlideJson = BuildMacroErrorJson("InspectSlideJson", Err)
+End Function
+
 Public Function ExecuteActionJson(ByVal actionJson As String) As String
     On Error GoTo ErrHandler
     Dim actionObj As Object

@@ -166,6 +166,8 @@ JSON 会话模式会保持同一个 COM 会话，持续从 stdin 读取命令。
 
 基于 7 页真实 PPT 的本地实测数据（11 项操作，Windows 11 + Office 16 + Python 3.12）：
 
+> 注：inspect 性能与 **shape 总数**强相关，而非页数。上表基于 7 页 / 约几十个 shape；在 119 shapes 的大文件上 pywin32 inspect 可达 20s+，VBA 仍保持亚秒级。评估时请以 shape 数为准。
+
 | 操作 | pywin32 | VBA | VBA 加速比 |
 |------|---------|-----|-----------|
 | inspect (7页结构) | 3.90s | 0.20s | **20x** |
@@ -199,11 +201,25 @@ JSON 会话模式会保持同一个 COM 会话，持续从 stdin 读取命令。
 
 | 场景 | 推荐 backend |
 |------|-------------|
-| 频繁 inspect / 大量读操作 | `vba` (20x 更快) |
-| 批量修改多页 slide | `vba` (3-8x 更快) |
+| 频繁 inspect / 大量读操作 | `vba` (20-33x 更快) |
+| 批量修改多页 slide | `vba` (3-9x 更快) |
 | 单次简单修改 | `pywin32` (差距小，无需导入 VBA 模块) |
 | 无法启用 VBA 宏信任 | `pywin32` (不依赖 VBA) |
 | 需要扩展自定义 COM 操作 | `pywin32` (Python 直接写，更灵活) |
+
+### 性能 Insights
+
+1. **IPC 是 pywin32 的致命瓶颈**：pywin32 每次访问 shape 属性都是跨进程 COM 调用（~20ms/次），inspect 7 页需 ~200 次往返。VBA 在 PowerPoint 进程内直接访问，零 IPC，inspect 快 27 倍。
+
+2. **读密集收益最大，混合负载趋于持平**：纯读(inspect) 快 27-33x，纯写(modify) 快 3-9x，但混合高频循环 ~1x — 此时瓶颈已转移到 PowerPoint 进程内部的对象遍历和渲染。
+
+3. **VBA 延时恒定 ~20ms/op**：不随 batch 大小增长。pywin32 在 116-173ms 间波动，COM proxy 缓存和进程调度开销随并发放大。
+
+4. **CPU 差距比延时差距更大**：延时快 12x，但 Python CPU 低 50x。pywin32 大量 CPU 花在 COM marshalling（序列化、跨进程内存拷贝），VBA 将计算下沉到 PowerPoint 进程，Python 端近乎零开销。
+
+5. **内存无差异**：VBA 模块仅增加 ~23MB（PowerPoint 侧），Python 侧完全一致。性能提升是"免费的"。
+
+6. **真实交互体感**：典型用户流程 `inspect → 3~5 个 action → 保存`，pywin32 约 5.7s，VBA 约 0.3s — 从"等一等"到"瞬间完成"。
 
 ## 安装配置（所有模式通用）
 
@@ -254,6 +270,16 @@ setx OPENAI_API_KEY "ollama"
 | **内存竞争（模式 A）** | Ollama + PowerPoint 同时运行，建议 16GB+ |
 | **模型质量（模式 A）** | 本地模型不如 GPT-4/Claude，复杂指令可能需多次尝试 |
 | **VBA 策略要求** | 需把 `references/PptEditorBridge.bas` 和 `references/JsonConverter.bas` 一起导入到启用宏的演示文稿或 add-in；`JsonConverter.bas` 是 VBA backend 的必需桥接组件 |
+
+### 已知限制与踩坑
+
+| 场景 | 说明 / 规避 |
+|------|------|
+| **OneDrive 同步路径** | `Presentations.Open()` 对 `C:\Users\xxx\OneDrive - .../xxx.pptx` 这类同步路径可能失败。规避：先把文件复制到本地非同步目录（如 `%TEMP%`）再打开。 |
+| **无窗口模式被回收** | `visible=False` 下后台 PowerPoint 进程可能被系统/策略回收，后续 COM 调用报 `RPC server is unavailable`。规避：改用 `--headed`（可见窗口）运行。 |
+| **空白布局无占位符** | 空白布局（layout 7/12）没有占位符，`target={"type":"title/subtitle/body"}` 匹配不到。规避：改用 `name` / `text_match` / `position` / `index` 定位，或先 `add_textbox` 再按 name 改。 |
+| **大文件 inspect** | shape 数很大时 pywin32 inspect 较慢；已改为索引遍历避免 COM 枚举器失效。需要单页时 VBA backend 可用 `InspectSlideJson(slideIndex)`。 |
+| **非文本 shape 改字体** | `modify_font` / `set_alignment` 对无文本框的 shape（如图片）会跳过并返回提示，不再抛异常。 |
 
 ## 适用场景
 
