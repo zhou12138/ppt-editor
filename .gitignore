@@ -3,6 +3,7 @@ __pycache__/
 *_modified.pptx
 *_structure.json
 *.pptx
+*.pptm
 !sample.pptx
 !skills/**/*.pptx
 

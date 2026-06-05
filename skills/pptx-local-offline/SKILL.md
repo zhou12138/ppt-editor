@@ -162,6 +162,49 @@ JSON 会话模式会保持同一个 COM 会话，持续从 stdin 读取命令。
 | `--backend` | 选择底层策略：`pywin32` 或 `vba` | B, C |
 | `--vba-module` | 指定 VBA 桥接宏模块名，默认 `PptEditorBridge` | B, C |
 
+## Backend 性能对比
+
+基于 7 页真实 PPT 的本地实测数据（11 项操作，Windows 11 + Office 16 + Python 3.12）：
+
+| 操作 | pywin32 | VBA | VBA 加速比 |
+|------|---------|-----|-----------|
+| inspect (7页结构) | 3.90s | 0.20s | **20x** |
+| inspect ×5 | 20.13s | 1.00s | **20x** |
+| find 7 个标题 | 0.35s | 0.21s | 1.7x |
+| modify_font (单个) | 0.11s | 0.04s | 2.7x |
+| modify_font (7页) | 0.90s | 0.12s | **7.6x** |
+| modify_text | 0.05s | 0.02s | 2.6x |
+| move_shape | 0.08s | 0.03s | 3.1x |
+| resize_shape | 0.02s | 0.01s | 1.6x |
+| add + delete textbox | 0.20s | 0.04s | **5.2x** |
+| set_notes | 0.10s | 0.02s | **6.4x** |
+| batch 17 混合操作 | 1.28s | 0.37s | **3.5x** |
+| **总计 (不含 open)** | **27.1s** | **2.0s** | **⚡ 13.3x** |
+
+资源占用：
+
+| 指标 | pywin32 | VBA |
+|------|---------|-----|
+| CPU user | 4.09s | 0.09s (45x 更低) |
+| CPU kernel | 9.66s | 0.08s (120x 更低) |
+| Python 内存 | 28.9 MB | 28.3 MB (持平) |
+| PowerPoint 内存 | 373.6 MB | 378.0 MB (持平) |
+
+### 性能差异原因
+
+- **pywin32**：每次属性访问都是跨进程 COM IPC 调用（进程间通信），inspect 遍历所有 shape 属性时开销巨大
+- **VBA**：在 PowerPoint 进程内直接访问对象模型，零 IPC 开销；JSON 序列化后一次性返回给 Python
+
+### 选择建议
+
+| 场景 | 推荐 backend |
+|------|-------------|
+| 频繁 inspect / 大量读操作 | `vba` (20x 更快) |
+| 批量修改多页 slide | `vba` (3-8x 更快) |
+| 单次简单修改 | `pywin32` (差距小，无需导入 VBA 模块) |
+| 无法启用 VBA 宏信任 | `pywin32` (不依赖 VBA) |
+| 需要扩展自定义 COM 操作 | `pywin32` (Python 直接写，更灵活) |
+
 ## 安装配置（所有模式通用）
 
 ```powershell

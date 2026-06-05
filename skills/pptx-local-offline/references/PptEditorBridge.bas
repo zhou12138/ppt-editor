@@ -59,6 +59,14 @@ Public Function ExecuteActionJson(ByVal actionJson As String) As String
     actionName = LCase$(CStr(actionObj("action")))
 
     Select Case actionName
+        Case "add_slide"
+            ExecuteActionJson = HandleAddSlide(actionObj)
+        Case "delete_slide"
+            ExecuteActionJson = HandleDeleteSlide(actionObj)
+        Case "move_slide"
+            ExecuteActionJson = HandleMoveSlide(actionObj)
+        Case "duplicate_slide"
+            ExecuteActionJson = HandleDuplicateSlide(actionObj)
         Case "modify_text"
             ExecuteActionJson = HandleModifyText(actionObj)
         Case "modify_font"
@@ -73,6 +81,8 @@ Public Function ExecuteActionJson(ByVal actionJson As String) As String
             ExecuteActionJson = HandleMoveShape(actionObj)
         Case "resize_shape"
             ExecuteActionJson = HandleResizeShape(actionObj)
+        Case "set_zorder"
+            ExecuteActionJson = HandleSetZOrder(actionObj)
         Case "delete", "delete_shape"
             ExecuteActionJson = HandleDeleteShape(actionObj)
         Case "add_textbox"
@@ -81,8 +91,30 @@ Public Function ExecuteActionJson(ByVal actionJson As String) As String
             ExecuteActionJson = HandleAddShape(actionObj)
         Case "add_picture"
             ExecuteActionJson = HandleAddPicture(actionObj)
+        Case "add_table"
+            ExecuteActionJson = HandleAddTable(actionObj)
         Case "set_slide_background"
             ExecuteActionJson = HandleSetSlideBackground(actionObj)
+        Case "set_slide_background_image"
+            ExecuteActionJson = HandleSetSlideBackgroundImage(actionObj)
+        Case "modify_cell"
+            ExecuteActionJson = HandleModifyCell(actionObj)
+        Case "table_row_add"
+            ExecuteActionJson = HandleTableRowAdd(actionObj)
+        Case "table_row_delete"
+            ExecuteActionJson = HandleTableRowDelete(actionObj)
+        Case "table_col_add"
+            ExecuteActionJson = HandleTableColAdd(actionObj)
+        Case "table_col_delete"
+            ExecuteActionJson = HandleTableColDelete(actionObj)
+        Case "animation"
+            ExecuteActionJson = HandleAnimation(actionObj)
+        Case "remove_animation"
+            ExecuteActionJson = HandleRemoveAnimation(actionObj)
+        Case "modify_animation_effect"
+            ExecuteActionJson = HandleModifyAnimationEffect(actionObj)
+        Case "transition"
+            ExecuteActionJson = HandleTransition(actionObj)
         Case "set_notes"
             ExecuteActionJson = SetNotes(CLng(actionObj("slide")), CStr(actionObj("params")("text")))
         Case "append_notes"
@@ -101,6 +133,41 @@ Public Function ExecuteActionJson(ByVal actionJson As String) As String
 
 ErrHandler:
     ExecuteActionJson = BuildMacroErrorText("ExecuteActionJson", Err)
+End Function
+
+Private Function HandleAddSlide(ByVal actionObj As Object) As String
+    Dim params As Object
+    Dim slideIndex As Long
+    Dim layout As Long
+
+    Set params = actionObj("params")
+    slideIndex = GetOptionalLong(params, "index", ActivePresentation.Slides.Count + 1)
+    layout = GetOptionalLong(params, "layout", 1)
+    ActivePresentation.Slides.Add slideIndex, layout
+    HandleAddSlide = "添加幻灯片: 第" & slideIndex & "页 (layout=" & layout & ")"
+End Function
+
+Private Function HandleDeleteSlide(ByVal actionObj As Object) As String
+    Dim slideIndex As Long
+    slideIndex = CLng(actionObj("slide"))
+    ActivePresentation.Slides(slideIndex).Delete
+    HandleDeleteSlide = "删除第" & slideIndex & "页"
+End Function
+
+Private Function HandleMoveSlide(ByVal actionObj As Object) As String
+    Dim slideIndex As Long
+    Dim newPos As Long
+    slideIndex = CLng(actionObj("slide"))
+    newPos = CLng(actionObj("params")("new_pos"))
+    ActivePresentation.Slides(slideIndex).MoveTo newPos
+    HandleMoveSlide = "第" & slideIndex & "页移动到第" & newPos & "页"
+End Function
+
+Private Function HandleDuplicateSlide(ByVal actionObj As Object) As String
+    Dim slideIndex As Long
+    slideIndex = CLng(actionObj("slide"))
+    ActivePresentation.Slides(slideIndex).Duplicate
+    HandleDuplicateSlide = "Duplicated slide " & slideIndex
 End Function
 
 Private Function InspectShape(ByVal prs As Presentation, ByVal shp As Shape) As Object
@@ -447,6 +514,26 @@ Private Function HandleDeleteShape(ByVal actionObj As Object) As String
     HandleDeleteShape = JoinCollection(results, "; ")
 End Function
 
+Private Function HandleSetZOrder(ByVal actionObj As Object) As String
+    Dim shapes As Collection
+    Dim shp As Shape
+    Dim results As Collection
+    Dim position As Variant
+
+    Set shapes = FindShapes(CLng(actionObj("slide")), actionObj("target"))
+    If shapes.Count = 0 Then
+        Err.Raise vbObjectError + 2050, "PptEditorBridge", "未找到匹配的 shape"
+    End If
+
+    position = ResolveZOrder(actionObj("params")("position"))
+    Set results = New Collection
+    For Each shp In shapes
+        shp.ZOrder position
+        results.Add "Z-order [" & shp.Name & "] -> " & CStr(actionObj("params")("position"))
+    Next shp
+    HandleSetZOrder = JoinCollection(results, "; ")
+End Function
+
 Private Function HandleAddTextbox(ByVal actionObj As Object) As String
     Dim slideIndex As Long
     Dim params As Object
@@ -532,6 +619,27 @@ Private Function HandleAddPicture(ByVal actionObj As Object) As String
     HandleAddPicture = "第" & slideIndex & "页插入图片: " & picPath
 End Function
 
+Private Function HandleAddTable(ByVal actionObj As Object) As String
+    Dim slideIndex As Long
+    Dim params As Object
+    Dim rowsCount As Long
+    Dim colsCount As Long
+
+    slideIndex = CLng(actionObj("slide"))
+    Set params = actionObj("params")
+    rowsCount = CLng(params("rows"))
+    colsCount = CLng(params("cols"))
+
+    ActivePresentation.Slides(slideIndex).Shapes.AddTable _
+        rowsCount, colsCount, _
+        GetOptionalDouble(params, "left", 100), _
+        GetOptionalDouble(params, "top", 100), _
+        GetOptionalDouble(params, "width", 400), _
+        GetOptionalDouble(params, "height", 200)
+
+    HandleAddTable = "Added " & rowsCount & "x" & colsCount & " table on slide " & slideIndex
+End Function
+
 Private Function HandleSetSlideBackground(ByVal actionObj As Object) As String
     Dim slideIndex As Long
     Dim colorValue As Long
@@ -545,6 +653,144 @@ Private Function HandleSetSlideBackground(ByVal actionObj As Object) As String
     sld.Background.Fill.Solid
     sld.Background.Fill.ForeColor.RGB = colorValue
     HandleSetSlideBackground = "第" & slideIndex & "页背景 → " & ToHexColor(colorValue)
+End Function
+
+Private Function HandleSetSlideBackgroundImage(ByVal actionObj As Object) As String
+    Dim slideIndex As Long
+    Dim imagePath As String
+    Dim sld As Slide
+
+    slideIndex = CLng(actionObj("slide"))
+    imagePath = CStr(actionObj("params")("image_path"))
+    Set sld = ActivePresentation.Slides(slideIndex)
+
+    sld.FollowMasterBackground = msoFalse
+    sld.Background.Fill.UserPicture imagePath
+    HandleSetSlideBackgroundImage = "Slide " & slideIndex & " background set to " & imagePath
+End Function
+
+Private Function HandleModifyCell(ByVal actionObj As Object) As String
+    Dim tableShape As Shape
+    Dim tableObj As Table
+    Dim rowIdx As Long
+    Dim colIdx As Long
+    Dim oldText As String
+    Dim newText As String
+
+    Set tableShape = FindTableShape(CLng(actionObj("slide")), actionObj("target"))
+    If tableShape Is Nothing Then
+        Err.Raise vbObjectError + 2051, "PptEditorBridge", "第" & actionObj("slide") & "页未找到表格"
+    End If
+
+    rowIdx = CLng(actionObj("params")("row"))
+    colIdx = CLng(actionObj("params")("col"))
+    newText = CStr(actionObj("params")("text"))
+    Set tableObj = tableShape.Table
+    oldText = tableObj.Cell(rowIdx, colIdx).Shape.TextFrame.TextRange.Text
+    tableObj.Cell(rowIdx, colIdx).Shape.TextFrame.TextRange.Text = newText
+    HandleModifyCell = "表格(" & rowIdx & "," & colIdx & "): '" & Left$(oldText, 20) & "' → '" & Left$(newText, 20) & "'"
+End Function
+
+Private Function HandleTableRowAdd(ByVal actionObj As Object) As String
+    Dim tableShape As Shape
+    Set tableShape = FindTableShape(CLng(actionObj("slide")), actionObj("target"))
+    If tableShape Is Nothing Then Err.Raise vbObjectError + 2051, "PptEditorBridge", "未找到表格"
+    tableShape.Table.Rows.Add
+    HandleTableRowAdd = "表格添加一行 (共" & tableShape.Table.Rows.Count & "行)"
+End Function
+
+Private Function HandleTableRowDelete(ByVal actionObj As Object) As String
+    Dim tableShape As Shape
+    Dim rowIdx As Long
+    Set tableShape = FindTableShape(CLng(actionObj("slide")), actionObj("target"))
+    If tableShape Is Nothing Then Err.Raise vbObjectError + 2051, "PptEditorBridge", "未找到表格"
+    rowIdx = CLng(actionObj("params")("row"))
+    tableShape.Table.Rows(rowIdx).Delete
+    HandleTableRowDelete = "表格删除第" & rowIdx & "行"
+End Function
+
+Private Function HandleTableColAdd(ByVal actionObj As Object) As String
+    Dim tableShape As Shape
+    Set tableShape = FindTableShape(CLng(actionObj("slide")), actionObj("target"))
+    If tableShape Is Nothing Then Err.Raise vbObjectError + 2051, "PptEditorBridge", "未找到表格"
+    tableShape.Table.Columns.Add
+    HandleTableColAdd = "表格添加一列 (共" & tableShape.Table.Columns.Count & "列)"
+End Function
+
+Private Function HandleTableColDelete(ByVal actionObj As Object) As String
+    Dim tableShape As Shape
+    Dim colIdx As Long
+    Set tableShape = FindTableShape(CLng(actionObj("slide")), actionObj("target"))
+    If tableShape Is Nothing Then Err.Raise vbObjectError + 2051, "PptEditorBridge", "未找到表格"
+    colIdx = CLng(actionObj("params")("col"))
+    tableShape.Table.Columns(colIdx).Delete
+    HandleTableColDelete = "表格删除第" & colIdx & "列"
+End Function
+
+Private Function HandleAnimation(ByVal actionObj As Object) As String
+    Dim shapes As Collection
+    Dim shp As Shape
+    Dim results As Collection
+    Dim effectId As Long
+    Dim slideIndex As Long
+
+    slideIndex = CLng(actionObj("slide"))
+    Set shapes = FindShapes(slideIndex, actionObj("target"))
+    If shapes.Count = 0 Then Err.Raise vbObjectError + 2050, "PptEditorBridge", "未找到匹配的 shape"
+    effectId = ResolveAnimationEffect(GetOptionalString(actionObj("params"), "effect", "appear"))
+    Set results = New Collection
+    For Each shp In shapes
+        ActivePresentation.Slides(slideIndex).TimeLine.MainSequence.AddEffect _
+            Shape:=shp, effectId:=effectId, trigger:=1
+        results.Add "动画 [" & shp.Name & "] → " & GetOptionalString(actionObj("params"), "effect", "appear")
+    Next shp
+    HandleAnimation = JoinCollection(results, "; ")
+End Function
+
+Private Function HandleRemoveAnimation(ByVal actionObj As Object) As String
+    Dim slideIndex As Long
+    Dim seq As Sequence
+    Dim animIndex As Long
+
+    slideIndex = CLng(actionObj("slide"))
+    Set seq = ActivePresentation.Slides(slideIndex).TimeLine.MainSequence
+    animIndex = GetOptionalLong(actionObj("params"), "anim_index", 1)
+    If animIndex <= seq.Count Then
+        seq.Item(animIndex).Delete
+        HandleRemoveAnimation = "第" & slideIndex & "页删除第" & animIndex & "个动画"
+    Else
+        HandleRemoveAnimation = "第" & slideIndex & "页无第" & animIndex & "个动画"
+    End If
+End Function
+
+Private Function HandleModifyAnimationEffect(ByVal actionObj As Object) As String
+    Dim slideIndex As Long
+    Dim animIndex As Long
+    Dim newEffect As String
+    Dim seq As Sequence
+
+    slideIndex = CLng(actionObj("slide"))
+    animIndex = CLng(actionObj("params")("anim_index"))
+    newEffect = CStr(actionObj("params")("effect"))
+    Set seq = ActivePresentation.Slides(slideIndex).TimeLine.MainSequence
+    If animIndex > seq.Count Then Err.Raise vbObjectError + 2052, "PptEditorBridge", "动画索引不存在"
+    seq.Item(animIndex).EffectType = ResolveAnimationEffect(newEffect)
+    HandleModifyAnimationEffect = "第" & slideIndex & "页第" & animIndex & "个动画效果 → " & newEffect
+End Function
+
+Private Function HandleTransition(ByVal actionObj As Object) As String
+    Dim slideIndex As Long
+    Dim trans As String
+    Dim sld As Slide
+
+    slideIndex = CLng(actionObj("slide"))
+    trans = GetOptionalString(actionObj("params"), "transition", "fade")
+    Set sld = ActivePresentation.Slides(slideIndex)
+    sld.SlideShowTransition.EntryEffect = ResolveTransitionEffect(trans)
+    If ExistsKey(actionObj("params"), "duration") Then
+        sld.SlideShowTransition.Duration = CDbl(actionObj("params")("duration"))
+    End If
+    HandleTransition = "第" & slideIndex & "页切换效果: " & trans
 End Function
 
 Private Function HandleSleep(ByVal actionObj As Object) As String
@@ -563,6 +809,17 @@ Private Function FindFirstShape(ByVal slideIndex As Long, ByVal target As Object
     Dim matches As Collection
     Set matches = FindShapes(slideIndex, target)
     If matches.Count > 0 Then Set FindFirstShape = matches(1)
+End Function
+
+Private Function FindTableShape(ByVal slideIndex As Long, ByVal target As Object) As Shape
+    Dim tableTarget As Object
+    If target Is Nothing Then
+        Set tableTarget = CreateObject("Scripting.Dictionary")
+        tableTarget("type") = "table"
+        Set FindTableShape = FindFirstShape(slideIndex, tableTarget)
+    Else
+        Set FindTableShape = FindFirstShape(slideIndex, target)
+    End If
 End Function
 
 Private Function FindShapes(ByVal slideIndex As Long, ByVal target As Object) As Collection
@@ -765,6 +1022,68 @@ Private Function ResolveAlignment(ByVal align As Variant) As Long
             ResolveAlignment = 4
         Case Else
             ResolveAlignment = CLng(align)
+    End Select
+End Function
+
+Private Function ResolveZOrder(ByVal position As Variant) As Long
+    Dim key As String
+    key = LCase$(CStr(position))
+    Select Case key
+        Case "front"
+            ResolveZOrder = 0
+        Case "back"
+            ResolveZOrder = 1
+        Case "forward"
+            ResolveZOrder = 2
+        Case "backward"
+            ResolveZOrder = 3
+        Case Else
+            ResolveZOrder = CLng(position)
+    End Select
+End Function
+
+Private Function ResolveAnimationEffect(ByVal effectName As String) As Long
+    Select Case LCase$(effectName)
+        Case "appear"
+            ResolveAnimationEffect = 1
+        Case "fly"
+            ResolveAnimationEffect = 2
+        Case "fade"
+            ResolveAnimationEffect = 10
+        Case "zoom"
+            ResolveAnimationEffect = 53
+        Case "bounce"
+            ResolveAnimationEffect = 26
+        Case Else
+            ResolveAnimationEffect = 1
+    End Select
+End Function
+
+Private Function ResolveTransitionEffect(ByVal transitionName As String) As Long
+    ' Real PowerPoint ppEntryEffect constants (see pptx_editor_com.py set_transition).
+    Select Case LCase$(transitionName)
+        Case "fade"
+            ResolveTransitionEffect = 3849
+        Case "push"
+            ResolveTransitionEffect = 3334
+        Case "wipe"
+            ResolveTransitionEffect = 769
+        Case "split"
+            ResolveTransitionEffect = 3073
+        Case "dissolve"
+            ResolveTransitionEffect = 1537
+        Case "cut"
+            ResolveTransitionEffect = 257
+        Case "cover"
+            ResolveTransitionEffect = 1025
+        Case "uncover"
+            ResolveTransitionEffect = 1793
+        Case "random"
+            ResolveTransitionEffect = 513
+        Case "none"
+            ResolveTransitionEffect = 0
+        Case Else
+            ResolveTransitionEffect = 2745
     End Select
 End Function
 
