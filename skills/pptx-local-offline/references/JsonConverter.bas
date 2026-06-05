@@ -46,7 +46,12 @@ Private Function ParseObject() As Object
         key = ParseString()
         SkipWhitespace
         ExpectChar ":"
-        value = ParseValue()
+        SkipWhitespace
+        If CurrentChar() = "{" Or CurrentChar() = "[" Then
+            Set value = ParseValue()
+        Else
+            value = ParseValue()
+        End If
         AssignDictionaryValue result, key, value
         SkipWhitespace
         If CurrentChar() = "}" Then Exit Do
@@ -70,10 +75,12 @@ Private Function ParseArray() As Collection
     End If
 
     Do
-        value = ParseValue()
-        If IsObject(value) Then
+        SkipWhitespace
+        If CurrentChar() = "{" Or CurrentChar() = "[" Then
+            Set value = ParseValue()
             result.Add value
         Else
+            value = ParseValue()
             result.Add value
         End If
         SkipWhitespace
@@ -185,13 +192,28 @@ Private Function SerializeCollection(ByVal col As Collection) As String
 End Function
 
 Private Function EscapeJson(ByVal text As String) As String
-    text = Replace(text, "\", "\\")
-    text = Replace(text, """", "\"")
-    text = Replace(text, vbCrLf, "\n")
-    text = Replace(text, vbCr, "\n")
-    text = Replace(text, vbLf, "\n")
-    text = Replace(text, vbTab, "\t")
-    EscapeJson = text
+    Dim i As Long, ch As String, code As Long, result As String
+    result = ""
+    For i = 1 To Len(text)
+        ch = Mid$(text, i, 1)
+        code = AscW(ch)
+        Select Case code
+        Case 92:  result = result & "\\"
+        Case 34:  result = result & "\"""
+        Case 8:   result = result & "\b"
+        Case 9:   result = result & "\t"
+        Case 10:  result = result & "\n"
+        Case 12:  result = result & "\f"
+        Case 13:  result = result & "\r"
+        Case Else
+            If code >= 32 Then
+                result = result & ch
+            Else
+                result = result & "\u" & Right$("0000" & Hex$(code), 4)
+            End If
+        End Select
+    Next i
+    EscapeJson = result
 End Function
 
 Private Sub AssignDictionaryValue(ByVal dict As Object, ByVal key As String, ByVal value As Variant)

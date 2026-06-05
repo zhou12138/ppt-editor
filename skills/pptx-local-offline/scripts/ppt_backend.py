@@ -41,6 +41,8 @@ def create_backend(name="pywin32", visible=False, vba_module="PptEditorBridge"):
 class PowerPointVBA:
     """PowerPoint backend that routes inspect/actions through Application.Run."""
 
+    ERROR_PREFIX = "__VBA_ERROR__:"
+
     def __init__(self, visible=False, macro_module="PptEditorBridge"):
         if win32com is None or pythoncom is None:
             print("❌ pip install pywin32 (Windows + Office required)")
@@ -55,12 +57,18 @@ class PowerPointVBA:
 
     def _run_macro(self, macro_name, *args):
         try:
-            return self.app.Run(f"{self.macro_module}.{macro_name}", *args)
+            result = self.app.Run(f"{self.macro_module}.{macro_name}", *args)
+            return self._normalize_macro_result(macro_name, result)
         except Exception as exc:
             raise RuntimeError(
                 f"VBA backend 调用失败: {self.macro_module}.{macro_name}。"
                 f"请先导入/实现 VBA 桥接模块。原始错误: {exc}"
             ) from exc
+
+    def _normalize_macro_result(self, macro_name, result):
+        if isinstance(result, str) and result.startswith(self.ERROR_PREFIX):
+            raise RuntimeError(f"VBA backend 运行失败 [{macro_name}]: {result[len(self.ERROR_PREFIX):].strip()}")
+        return result
 
     def open(self, path):
         self.filepath = os.path.abspath(path)
@@ -101,7 +109,10 @@ class PowerPointVBA:
         if not raw:
             return {"slides": []}
         if isinstance(raw, str):
-            return json.loads(raw)
+            data = json.loads(raw)
+            if isinstance(data, dict) and data.get("error"):
+                raise RuntimeError(f"VBA backend inspect 失败: {data['error']}")
+            return data
         return raw
 
     def print_structure(self, desc):

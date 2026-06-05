@@ -47,6 +47,12 @@ python pptx_editor_llm.py deck.pptx --interactive
 
 底层执行策略现在支持通过 `--backend pywin32|vba` 切换。默认是 `pywin32`。`vba` 策略会通过 `Application.Run` 调用 VBA 桥接宏，适合已有宏工程或准备把动作下沉到 VBA 的场景。当前 `vba` 策略推荐搭配 `--exec-actions` / `--interactive-actions` 使用；`--exec-script` 仍然只支持 Python。
 
+`vba` 策略现在依赖 skill 内置的 `references/JsonConverter.bas`。它不是可选工具，而是 VBA backend 的 JSON 桥接组件：
+- `ExecuteActionJson()` 用它把 Python 传来的 action JSON 解析成 VBA 可操作的 `Dictionary` / `Collection`
+- `InspectPresentationJson()` 用它把 VBA 侧组装好的结构序列化成 JSON 再返回给 Python
+
+不要再从外部下载通用版 `VBA-JSON` 覆盖它。skill 自带的是一份为 PowerPoint VBA 场景裁剪过的精简版本，用来避开社区通用版在 PowerPoint 环境下的兼容性和卡死问题。
+
 `inspect()` 现在会额外标记非文本内容：占位符或普通 shape 里如果包含图片、图表、表格或媒体，会在结构里给出 `has_image`、`has_chart`、`has_table`、`has_media`，CLI 输出也会显示 `[图片]`、`[图表]` 之类的摘要，不再把这类元素误显示成“(无)”。
 
 现在脚本模式额外内建了两个辅助函数：
@@ -204,7 +210,7 @@ setx OPENAI_API_KEY "ollama"
 | **Notes 进度显示** | `--notes-progress` 默认会覆盖目标备注页当前内容；如需保留历史请在脚本里用 `log_note(..., append=True)` |
 | **内存竞争（模式 A）** | Ollama + PowerPoint 同时运行，建议 16GB+ |
 | **模型质量（模式 A）** | 本地模型不如 GPT-4/Claude，复杂指令可能需多次尝试 |
-| **VBA 策略要求** | 需先把 `references/PptEditorBridge.bas` 导入到启用宏的演示文稿或 add-in，并补齐桥接函数 |
+| **VBA 策略要求** | 需把 `references/PptEditorBridge.bas` 和 `references/JsonConverter.bas` 一起导入到启用宏的演示文稿或 add-in；`JsonConverter.bas` 是 VBA backend 的必需桥接组件 |
 
 ## 适用场景
 
@@ -218,3 +224,83 @@ setx OPENAI_API_KEY "ollama"
 - `references/setup-guide.md` - Ollama 安装与模型选择详细指南
 - `references/interactive-session-guide.md` - 交互会话命令协议
 - `references/PptEditorBridge.bas` - VBA backend 桥接模块模板
+- `references/JsonConverter.bas` - PowerPoint 兼容的精简 JSON 解析/序列化模块，供 VBA backend 使用
+
+## VBA 开发踩坑指南
+
+在为本 skill 编写或修改 VBA 代码时，务必注意以下经过实际调试验证的陷阱。
+
+### 1. 引号转义极易出错 — 优先用 `Chr(34)`
+
+VBA 用 `""` 在字符串内表示一个双引号，层层嵌套后极难数清：
+
+```vba
+' ❌ 少一个引号 → VBA 编译器死循环卡死（不报错！）
+text = Replace(text, """", "\"")
+
+' ✅ 正确：5 个引号字符组成第三参数
+text = Replace(text, """", "\""")
+
+' ✅ 推荐：用 Chr(34) 彻底避免数引号
+text = Replace(text, Chr(34), "\" & Chr(34))
+```
+
+> **教训：** 一个引号的 typo 导致整个 VBA 模块编译时死循环，所有 Public Function 均不可用，`On Error Resume Next` 也捕获不了编译期错误。排查耗时数小时。
+
+### 2. 对象赋值必须用 `Set`
+
+VBA 区分值赋值 (`Let`) 和对象引用赋值 (`Set`)。遗漏 `Set` 不一定有编译错误，但运行时会抛 **Error 450**：
+
+```vba
+' ❌ Let 赋值 — Collection/Dictionary 没有默认属性 → Error 450
+dict("items") = myCollection
+value = FunctionReturningObject()
+
+' ✅ Set 赋值
+Set dict("items") = myCollection
+Set value = FunctionReturningObject()
+```
+
+**需要 `Set` 的典型场景：**
+- `Scripting.Dictionary` 的 Item 赋值存放 Collection / Dictionary
+- 函数返回值是 Object 时的变量接收
+- `For Each ... In` 循环中也是对象时的变量接收
+
+**快速自检：** 搜索 `") = ` 模式，右侧如果是 Collection、Dictionary 或返回 Object 的函数调用，必须有 `Set`。
+
+### 3. VBA 编译错误会静默卡死
+
+与 Python 的 `SyntaxError` 不同，VBA 编译期问题可能：
+
+| 表现 | 原因 |
+|------|------|
+| COM 调用永久挂起 | VBA 弹出错误对话框等待用户点击，但 COM Automation 看不到 UI |
+| 模块级卡死 | 畸形语法导致编译器循环（如上述引号 bug） |
+| `On Error` 无效 | `On Error Resume Next` 只捕获运行时错误，不捕获编译期错误 |
+
+**建议：**
+- 每个 VBA 模块都提供一个零依赖的 `Ping()` 函数用于健康检查
+- 新代码先单独测试编译，再与其他模块集成
+- 复杂模块做增量添加，每加一个函数就测一次
+
+### 4. 第三方 VBA 库不能直接用于 PowerPoint
+
+社区 VBA 库（如 VBA-JSON v2.3.1）通常为 **Excel** 开发和测试。直接导入 PowerPoint 可能因以下内容导致编译卡死：
+
+| 不兼容内容 | 示例 |
+|-----------|------|
+| Windows API 声明 | `Private Declare PtrSafe Function ... Lib "kernel32"` |
+| 自定义 Type 结构 | `Private Type utc_SYSTEMTIME` |
+| Mac 条件编译 | `#If Mac Then ... Lib "/usr/lib/libc.dylib"` |
+
+**建议：** 不从外部下载覆盖 skill 内置的 `JsonConverter.bas`，它是专门为 PowerPoint VBA 裁剪的精简版。
+
+### 5. JSON 解析要正确处理空格
+
+Python 的 `json.dumps()` 默认在 `:` 和 `,` 后加空格：
+
+```python
+json.dumps({"key": "val"})  # → {"key": "val"}  注意冒号后有空格
+```
+
+VBA 侧的 JSON 解析器在读取 value 前必须跳过空格，否则 `"target": {` 中空格后的 `{` 无法被识别为对象起始符，导致用 `Let` 而非 `Set` 赋值，触发 Error 450。
