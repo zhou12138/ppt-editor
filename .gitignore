@@ -9,3 +9,7 @@ __pycache__/
 
 # 测试/输出临时目录
 opt/
+
+# C# Interop host build artifacts
+csharp_interop/**/bin/
+csharp_interop/**/obj/

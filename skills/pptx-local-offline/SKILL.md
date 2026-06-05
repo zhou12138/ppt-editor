@@ -221,6 +221,55 @@ JSON 会话模式会保持同一个 COM 会话，持续从 stdin 读取命令。
 
 6. **真实交互体感**：典型用户流程 `inspect → 3~5 个 action → 保存`，pywin32 约 5.7s，VBA 约 0.3s — 从"等一等"到"瞬间完成"。
 
+## C# Interop backend（`--backend csharp`）
+
+第三种执行策略：一个常驻的 C# 进程用**后期绑定 COM（dynamic / IDispatch，与 pywin32 同机制）**驱动 PowerPoint，
+通过 stdin/stdout 的 **行分隔 JSON-RPC** 与 Python 通信。主要用于 pywin32 / VBA / C# 三方性能对比。
+
+> 它是一个**可执行 host（exe），不是注册的 COM dll** —— 无需 regsvr32，不写注册表。
+
+### 其他 agent / 调用方如何使用
+
+**方式 1（推荐）：经 Python backend，自动拉起 exe**
+
+```powershell
+# 先构建一次（仓库内开发）：
+dotnet build csharp_interop/PptInteropHost -c Release
+# 之后正常用统一入口，加 --backend csharp 即可：
+python scripts/pptx_editor_llm.py deck.pptx --inspect --backend csharp
+```
+
+Python 侧 `PowerPointCSharp` 会自动定位 exe，查找顺序：
+1. 环境变量 `PPTX_EDITOR_CSHARP_HOST`（指向 `PptInteropHost.exe` 的绝对路径）
+2. 从 `ppt_backend.py` 向上逐层查找 `csharp_host/PptInteropHost.exe`（**安装版 skill**：`install-local-offline-skill.ps1` 会把 host 发布到 `<skill>/csharp_host/`）
+3. 向上查找 `csharp_interop/PptInteropHost/bin/<Release|Debug>/<tfm>/PptInteropHost.exe`（**仓库开发**构建产物）
+
+> 安装版 skill（`~/.copilot/skills/pptx-local-offline`）上层没有 `csharp_interop/`，
+> 因此安装脚本会在安装时执行 `dotnet publish` 把 host 放进 `csharp_host/`；
+> 若目标机无 dotnet，可改用 `PPTX_EDITOR_CSHARP_HOST` 指向已有 exe（`-SkipCSharp` 可跳过发布）。
+
+**方式 2：直接与 exe 通信（语言无关）**
+
+任何语言都可以 spawn 这个 exe，按行写入 JSON 请求、按行读回 JSON 响应：
+
+```text
+→ {"cmd":"ping"}
+← {"ok":true,"result":"pong"}
+→ {"cmd":"open","path":"C:\\deck.pptx","visible":true}
+← {"ok":true,"result":3}
+→ {"cmd":"inspect"}
+← {"ok":true,"result":{"slides":[...]}}
+→ {"cmd":"execute_action","action":{"action":"modify_font","slide":1,"target":{"name":"Title"},"params":{"bold":true,"color":255}}}
+← {"ok":true,"result":"加粗, 颜色→0xFF"}
+→ {"cmd":"quit"}
+← {"ok":true,"result":"bye"}
+```
+
+支持的 `cmd`：`ping` / `open` / `inspect` / `inspect_slide` / `execute_action` / `set_notes` / `append_notes` / `save` / `quit`。
+`execute_action` 的 `action` 负载与 VBA backend 完全一致（见模式 C 的 JSON 格式），target 定位语义对齐 pywin32（`type`/`name`/`text_match`/`position`/`index`/`id`）。
+
+> ⚠️ 颜色仍是 **BGR**（红=255/0xFF）；索引 **1-based**；PowerPoint 不允许 `Application.Visible=false`，host 已自动用无窗口方式打开演示文稿。
+
 ## 安装配置（所有模式通用）
 
 ```powershell
