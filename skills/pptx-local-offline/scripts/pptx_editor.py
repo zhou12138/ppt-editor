@@ -101,11 +101,11 @@ def print_structure(desc: dict):
         print(f"\n{'='*50}")
         print(f"📄 第 {slide['index']} 页 (布局: {slide['layout']})")
         print(f"{'='*50}")
-        for e in slide["elements"]:
+        for idx, e in enumerate(slide["elements"], 1):
             ph = f" [占位符:{e.get('ph_type','')}]" if e["is_placeholder"] else ""
             pos = e["position_label"]
             text_preview = e["text"][:40].replace("\n", "↵") if e["text"] else "(无文本)"
-            print(f"  [{e['id']}] {e['name']}{ph} ({pos})")
+            print(f"  [{idx}] [{e['id']}] {e['name']}{ph} ({pos})")
             print(f"       文本: {text_preview}")
             if "table" in e:
                 print(f"       表格: {len(e['table'])}行×{len(e['table'][0])}列")
@@ -159,6 +159,16 @@ def parse_intent(instruction: str, pptx_desc: dict) -> list:
             target["text_match"] = qm.group(1)
             break
     
+    # 按名称定位
+    m = re.search(r'(?:name|名称)[：:]([^\s,，]+)', instruction)
+    if m: target["name"] = m.group(1)
+
+    # 按索引定位
+    m = re.search(r'#(\d+)', instruction)
+    if m: target["index"] = int(m.group(1))
+    m = re.search(r'第(\d+)个', instruction)
+    if m and "index" not in target: target["index"] = int(m.group(1))
+
     # ---- 提取操作 + 参数 ----
     
     # 修改文本内容
@@ -320,6 +330,16 @@ def find_target(slide_desc: dict, target: dict) -> list:
         query = target["text_match"]
         candidates = [e for e in candidates if query in e.get("text", "")]
     
+    # 按名称匹配
+    if "name" in target:
+        candidates = [e for e in candidates if target["name"].lower() in e.get("name", "").lower()]
+
+    # 按索引匹配 (1-based position in elements list)
+    if "index" in target:
+        idx = target["index"]
+        all_elements = slide_desc.get("elements", [])
+        candidates = [e for e in candidates if (all_elements.index(e) + 1) == idx]
+
     return candidates
 
 
