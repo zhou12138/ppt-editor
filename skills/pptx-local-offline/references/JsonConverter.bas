@@ -94,9 +94,12 @@ End Function
 
 Private Function ParseString() As String
     Dim ch As String
-    Dim result As String
+    Dim buf As String
+    Dim pos As Long
 
     ExpectChar """"
+    buf = Space$(64)
+    pos = 0
     Do While jsonIndex <= Len(jsonText)
         ch = Mid$(jsonText, jsonIndex, 1)
         jsonIndex = jsonIndex + 1
@@ -105,22 +108,22 @@ Private Function ParseString() As String
             ch = Mid$(jsonText, jsonIndex, 1)
             jsonIndex = jsonIndex + 1
             Select Case ch
-                Case """", "\", "/": result = result & ch
-                Case "b": result = result & vbBack
-                Case "f": result = result & vbFormFeed
-                Case "n": result = result & vbLf
-                Case "r": result = result & vbCr
-                Case "t": result = result & vbTab
+                Case """", "\", "/": SbAppend buf, pos, ch
+                Case "b": SbAppend buf, pos, vbBack
+                Case "f": SbAppend buf, pos, vbFormFeed
+                Case "n": SbAppend buf, pos, vbLf
+                Case "r": SbAppend buf, pos, vbCr
+                Case "t": SbAppend buf, pos, vbTab
                 Case "u"
-                    result = result & ChrW$(CLng("&H" & Mid$(jsonText, jsonIndex, 4)))
+                    SbAppend buf, pos, ChrW$(CLng("&H" & Mid$(jsonText, jsonIndex, 4)))
                     jsonIndex = jsonIndex + 4
                 Case Else: Err.Raise vbObjectError + 3001, "JsonConverter", "Unsupported escape sequence: \" & ch
             End Select
         Else
-            result = result & ch
+            SbAppend buf, pos, ch
         End If
     Loop
-    ParseString = result
+    ParseString = Left$(buf, pos)
 End Function
 
 Private Function ParseNumber() As Variant
@@ -195,28 +198,32 @@ Private Function SerializeCollection(ByVal col As Collection) As String
 End Function
 
 Private Function EscapeJson(ByVal text As String) As String
-    Dim i As Long, ch As String, code As Long, result As String
-    result = ""
+    Dim i As Long, ch As String, code As Long
+    Dim buf As String, pos As Long
+    ' Most chars need no escaping, so an initial buffer of Len(text)
+    ' plus slack avoids almost all reallocations.
+    buf = Space$(Len(text) + 16)
+    pos = 0
     For i = 1 To Len(text)
         ch = Mid$(text, i, 1)
         code = AscW(ch)
         Select Case code
-        Case 92:  result = result & "\\"
-        Case 34:  result = result & "\"""
-        Case 8:   result = result & "\b"
-        Case 9:   result = result & "\t"
-        Case 10:  result = result & "\n"
-        Case 12:  result = result & "\f"
-        Case 13:  result = result & "\r"
+        Case 92:  SbAppend buf, pos, "\\"
+        Case 34:  SbAppend buf, pos, "\"""
+        Case 8:   SbAppend buf, pos, "\b"
+        Case 9:   SbAppend buf, pos, "\t"
+        Case 10:  SbAppend buf, pos, "\n"
+        Case 12:  SbAppend buf, pos, "\f"
+        Case 13:  SbAppend buf, pos, "\r"
         Case Else
             If code >= 32 Then
-                result = result & ch
+                SbAppend buf, pos, ch
             Else
-                result = result & "\u" & Right$("0000" & Hex$(code), 4)
+                SbAppend buf, pos, "\u" & Right$("0000" & Hex$(code), 4)
             End If
         End Select
     Next i
-    EscapeJson = result
+    EscapeJson = Left$(buf, pos)
 End Function
 
 Private Sub AssignDictionaryValue(ByVal dict As Object, ByVal key As String, ByVal value As Variant)
@@ -229,11 +236,40 @@ End Sub
 
 Private Function JoinCollection(ByVal values As Collection, ByVal separator As String) As String
     Dim i As Long
+    Dim buf As String, pos As Long
+    buf = Space$(256)
+    pos = 0
     For i = 1 To values.Count
-        If i > 1 Then JoinCollection = JoinCollection & separator
-        JoinCollection = JoinCollection & CStr(values(i))
+        If i > 1 Then SbAppend buf, pos, separator
+        SbAppend buf, pos, CStr(values(i))
     Next i
+    JoinCollection = Left$(buf, pos)
 End Function
+
+' ----------------------------------------------------------------------
+' StringBuilder (strategy 1): pre-allocated buffer written in place with
+' the Mid$ statement, doubling capacity on demand. Avoids the O(n^2)
+' reallocate-and-copy cost of repeated `s = s & x` concatenation.
+' ----------------------------------------------------------------------
+Private Sub SbAppend(ByRef buf As String, ByRef pos As Long, ByVal chunk As String)
+    Dim n As Long
+    n = Len(chunk)
+    If n = 0 Then Exit Sub
+    SbEnsure buf, pos + n
+    Mid$(buf, pos + 1, n) = chunk
+    pos = pos + n
+End Sub
+
+Private Sub SbEnsure(ByRef buf As String, ByVal needed As Long)
+    Dim cap As Long
+    cap = Len(buf)
+    If needed <= cap Then Exit Sub
+    If cap = 0 Then cap = 64
+    Do While cap < needed
+        cap = cap * 2
+    Loop
+    buf = buf & Space$(cap - Len(buf))
+End Sub
 
 Private Sub SkipWhitespace()
     Do While jsonIndex <= Len(jsonText)

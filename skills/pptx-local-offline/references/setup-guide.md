@@ -195,3 +195,78 @@ setx OPENAI_API_BASE "http://localhost:1234/v1"
 ```
 
 LM Studio 提供模型管理 GUI，适合不熟悉命令行的用户。
+
+## VBA Backend 配置
+
+VBA backend (`--backend vba`) 是性能最优的通用方案，inspect 比 pywin32 快 20 倍+。首次使用时 skill 会自动导入 VBA 模块，但需要先启用 VBA 项目访问权限。
+
+### 第一步：启用 VBA 项目信任
+
+1. 打开 PowerPoint → 文件 → 选项 → 信任中心 → 信任中心设置
+2. 左侧选择 **宏设置**
+3. 勾选 ✅ **"Trust access to the VBA project object model"**（信任对 VBA 项目对象模型的访问）
+4. 点击确定
+
+> ⚠️ 如果不启用此选项，`_ensure_vba_modules()` 自动导入会失败，报 "Programmatic access to VBA project is not trusted"。
+
+### 第二步：验证 VBA backend
+
+```powershell
+python pptx_editor_llm.py your_file.pptx --backend vba --inspect --headed
+```
+
+预期输出：
+```
+📥 自动导入 VBA 模块: JsonConverter
+📥 自动导入 VBA 模块: PptEditorBridge
+📂 已打开: your_file.pptx (N页)
+
+==================================================
+📄 第 1 页 (Title Slide)
+==================================================
+  [1] [2] Title 1 [CENTER_TITLE] (中中) → ...
+```
+
+### 自动导入机制
+
+VBA backend 在 `open()` 时会自动检查并导入以下模块：
+
+| 模块 | 来源 | 用途 |
+|------|------|------|
+| `JsonConverter` | `references/JsonConverter.bas` | JSON 序列化/反序列化 |
+| `PptEditorBridge` | `references/PptEditorBridge.bas` | VBA 桥接（inspect/execute） |
+
+如果目标 .pptx 已经包含这些模块（如之前导入过），不会重复导入。
+
+### 交互式使用
+
+```powershell
+python pptx_editor_llm.py your_file.pptx --backend vba --interactive-actions --headed
+```
+
+然后输入 JSON actions：
+```json
+{"action":"modify_font","slide":1,"target":{"type":"title"},"params":{"bold":true,"color":65280}}
+```
+
+### 常见问题
+
+#### "Sub or function not defined"
+
+**原因**：VBA 模块未导入（Trust Center 未启用或文件只读）  
+**解决**：检查 Trust Center 设置，确保文件不是只读模式
+
+#### "Wrong number of arguments or invalid property assignment" (Error 450)
+
+**原因**：PptEditorBridge 中 `Set` 关键字遗漏或 JsonConverter 版本不兼容  
+**解决**：确保使用 skill 内置的 `JsonConverter.bas`，不要从外部下载通用版 VBA-JSON
+
+#### VBA 模块导入后 inspect 挂起
+
+**原因**：从 GitHub 下载的通用版 VBA-JSON (1122 行) 在 PowerPoint VBA 中编译死循环  
+**解决**：skill 内置的是专门为 PowerPoint 裁剪的精简版 (266 行)，不要替换
+
+#### 中文内容匹配失败
+
+**原因**：VBA `InStr + vbTextCompare` 对中文字符不可靠  
+**解决**：使用 `target: {"name": "..."}` 或 `target: {"index": N}` 替代 `text_match`
