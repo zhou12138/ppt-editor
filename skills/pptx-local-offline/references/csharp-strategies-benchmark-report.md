@@ -500,12 +500,186 @@ Agent/LLM 直出 C# → Roslyn 编译 → 执行 → COM
 
 ---
 
-## 11. 结论
+## 11. 六维度全面对比
 
-> **exec-csharp 是 Agent/LLM 场景的最优策略**——把整个编辑计划写成 1 段 C# 脚本，用 1 次 Roslyn 编译换取 N-1 次往返节省。user_flow（5 步）只需 121ms（headless）/ 102ms（headed），比 JSON 快 4-6 倍。
+> 补充：悟空 🐒 (2026-06-09)
 >
-> **但它不适合单操作和高频重复场景**——此时 JSON（~15ms）和 template（缓存后 ~12ms）仍然是最快选择。
+> 从安全性、性能、开发成本、LLM 模型适配、部署、运维/生产化六个角度全面对比四种策略。
+
+### 11.1 综合评分卡
+
+| 维度 | csharp (JSON) | csharp-codeact | csharp-template | exec-csharp |
+|------|:---:|:---:|:---:|:---:|
+| **安全性** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ |
+| **性能（单操作）** | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ |
+| **性能（多步操作）** | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **开发成本** | ⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **LLM 模型适配** | ⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **部署复杂度** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ |
+| **运维/生产化** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ |
+
+---
+
+### 11.2 安全性
+
+| 维度 | csharp (JSON) | codeact | template | exec-csharp |
+|------|------|------|------|------|
+| **代码注入风险** | ❌ 不可能 | ⚠️ 自动翻译可控 | ❌ 不可能 | ❗ LLM 直出任意代码 |
+| **越权访问** | ❌ 封闭 API | ⚠️ 理论上可能 | ❌ 参数化安全 | ❗ 可访问 IO/网络/进程 |
+| **进程崩溃风险** | ❌ 不会 | ⚠️ 低概率 | ❌ 不会 | ❗ 空引用/死循环/COM断裂 |
+| **PPT 状态污染** | ⚠️ 可控 | ⚠️ 可控 | ⚠️ 可控 | ❗ 删错shape/改错slide不可逆 |
+| **沙箱需求** | 不需要 | 建议 | 不需要 | **必须** |
+
+**小结**：JSON 和 template 是「封闭系统」，安全边界清晰。exec-csharp 是「开放系统」，必须用沙箱补上安全缺口，否则等于在 COM 进程里执行不可信代码。
+
+---
+
+### 11.3 性能
+
+详见第 4-8 节数据，此处总结关键数字：
+
+| 场景 | 最优 | 延迟 | 次优 | 延迟 | 最差 | 延迟 |
+|------|------|------|------|------|------|------|
+| 单操作（modify_font） | template | **16ms** | JSON | 25ms | exec-cs | 199ms |
+| 多步流程（user_flow 5步） | **exec-cs** | **121ms** | JSON | 497ms | codeact | 1443ms |
+| 批量合并（batch_8） | template | **167ms** | JSON | 183ms | exec-cs | 310ms |
+| 批量逐条（batch_8_seq） | JSON | **161ms** | template | 190ms | codeact | 1708ms |
+| 吞吐量（modify/tp） | JSON | **56.6/s** | template | 54.0/s | exec-cs | 4.6/s |
+
+**拐点分析**：
+
+```
+N ≤ 3 步:  JSON 碾压（零编译税）
+N = 5 步:  exec-csharp 开始反超（user_flow 实证）
+N = 13 步: exec-csharp 与 JSON 持平
+N = 20+ 步: exec-csharp 碾压（编译税被摊薄）
+同类操作 × N: template 最优（缓存命中后 ~12ms/次）
+```
+
+**小结**：性能没有绝对赢家。单操作 JSON/template 最快，多步异构操作 exec-csharp 最快，高频同类操作 template 最快。选策略本质上是在选「编译税 vs 往返税」的 trade-off。
+
+---
+
+### 11.4 开发成本
+
+| 维度 | csharp (JSON) | codeact | template | exec-csharp |
+|------|------|------|------|------|
+| **新增 action** | ❗ 高：写 C# 方法 + switch case + 参数校验 | ✅ 低：Python 自动翻译 | ❗ 高：写模板 + 参数映射 | ✅ 零：LLM 直接用 PptApi |
+| **新增 COM 能力** | 需扩展 C# host | 需扩展 C# host | 需扩展 C# host | 只需暴露 API，LLM 自行组合 |
+| **代码量** | 多（每 action 一个方法） | 中（翻译层） | 多（每 type 一个模板） | **少**（只维护 PptApi） |
+| **测试覆盖** | ✅ 每个 action 可单测 | ⚠️ 翻译逻辑需测 | ✅ 每个模板可单测 | ⚠️ 难单测（LLM输出不确定） |
+| **新操作上线速度** | 慢（写码→测试→发布） | 中等 | 慢 | **即时**（LLM 写新脚本即可） |
+
+**小结**：JSON 和 template 是「重前端」架构——每个新操作都要写 C# 代码、测试、发布。exec-csharp 是「重后端」架构——只维护 PptApi 底层，新能力由 LLM 在运行时自由组合，开发者不需要为每个新操作写代码。
+
+---
+
+### 11.5 LLM 模型适配
+
+| 维度 | csharp (JSON) | codeact | template | exec-csharp |
+|------|------|------|------|------|
+| **LLM 输出格式** | JSON action 指令 | JSON（Python翻译） | JSON action 指令 | **原生 C# 代码** |
+| **Prompt 复杂度** | 高：列举所有 action schema | 高 | 高 | **低**：只需 PptApi 文档 |
+| **多模型兼容** | ⚠️ 弱模型常生成非法 JSON | ⚠️ 同上 | ⚠️ 同上 | ✅ 代码生成是 LLM 强项 |
+| **复杂逻辑表达** | ❌ 无循环/条件 | ✅ 可以 | ❌ 无法 | ✅ 任意 C# 控制流 |
+| **计划自然度** | 低：想步骤却要翻译成 JSON | 低 | 低 | **高**：Agent 直接写代码 |
+| **新 action 支持** | ❌ 待开发者添加 | ❌ 同上 | ❌ 同上 | ✅ LLM 可自行组合 |
+
+**Prompt 复杂度对比**：
+
+```
+JSON 方式——LLM 需要记住每个 action 的 schema：
+  {"action": "modify_font", "slide": 1, "shape_name": "TextBox 2",
+   "bold": true, "color_bgr": 255, "size": null, "italic": null, ...}
+
+exec-csharp 方式——LLM 只需知道 API 签名：
+  SetFont(FindByName(1, "TextBox 2"), bold: true, colorBgr: 0xFF);
+```
+
+**小结**：exec-csharp 对 LLM 最友好。代码生成是当前 LLM 的强项（尤其 GPT-4/Claude/Codex），而精确生成复杂 JSON schema 反而是弱项。弱模型（7B 参数级）生成 C# 可能不稳定，但主流模型（GPT-4o、Claude Sonnet+、Qwen-72B+）生成简单 API 调用非常可靠。
+
+---
+
+### 11.6 部署复杂度
+
+| 维度 | csharp (JSON) | codeact | template | exec-csharp |
+|------|------|------|------|------|
+| **依赖项** | .NET Runtime + Office | + Roslyn NuGet | + Roslyn NuGet | + Roslyn NuGet |
+| **内存占用** | 低（无 Roslyn） | 高（Roslyn 常驻） | 中（Roslyn + 缓存） | 高（Roslyn 常驻） |
+| **包体积** | 小（无 Roslyn DLL） | 大（+~30MB） | 大（+~30MB） | 大（+~30MB） |
+| **首次启动** | 快（直接加载） | 慢（Roslyn 初始化） | 慢（Roslyn 初始化） | 慢（Roslyn 初始化） |
+| **升级方式** | 重新 build host | 重新 build host | 重新 build host | **无需重启**（运行时编译） |
+
+**小结**：JSON 部署最简单——不需要 Roslyn，体积小，启动快。其他三种都需打包 Roslyn（~30MB），内存多占 ~100-200MB。但 exec-csharp 有独特优势：新增操作不需要重新发布 host，脚本在运行时编译，实现热更新。
+
+---
+
+### 11.7 运维与生产化
+
+| 维度 | csharp (JSON) | codeact | template | exec-csharp |
+|------|------|------|------|------|
+| **可观测性** | ✅ 每个 action 有明确日志 | ⚠️ 脚本内容需记录 | ✅ action type + 参数 | ❗ 需记录完整脚本+输出 |
+| **错误定位** | ✅ 精确到 action + 参数 | ⚠️ 需看翻译后脚本 | ✅ 精确到模板 + 参数 | ❗ 需看 LLM 生成的完整代码 |
+| **重试策略** | ✅ 逐条重试，幂等性好 | ⚠️ 重试需重新编译 | ✅ 逐条重试 | ❗ 整段脚本重试，可能副作用 |
+| **回滚能力** | ✅ 逐操作回滚 | ⚠️ 脚本级回滚 | ✅ 逐操作回滚 | ❗ 需快照/Undo 机制 |
+| **监控告警** | 简单（action 级指标） | 中等 | 简单 | 复杂（需监控编译+执行+COM 状态） |
+| **SLA 可预测性** | ✅ 延迟稳定（~15ms/步） | ⚠️ 编译抖动 | ✅ 缓存后稳定 | ❗ 编译时间 + LLM 输出质量双重不确定 |
+| **故障爆炸半径** | 单 action 失败 | 单脚本失败 | 单 action 失败 | **可能影响整个 PPT 状态** |
+| **审计合规** | ✅ 操作可枚举 | ⚠️ 需记录脚本 | ✅ 操作可枚举 | ❗ 需完整代码审计日志 |
+
+**生产化 Checklist（exec-csharp）**：
+
+```
+□ 沙箱：禁止 System.IO / System.Net / System.Diagnostics
+□ 超时：10s CancellationToken 硬超时
+□ 异常隔离：try/catch 包裹所有 execute_code
+□ 输出限制：Print() 输出 ≤ 1MB
+□ COM 状态快照：操作前保存副本，异常后回滚
+□ 降级兜底：exec-csharp 失败 → 自动降级 JSON 逐条执行
+□ 审计日志：记录完整脚本 + 执行结果 + 耗时
+□ 监控：编译成功率、执行成功率、COM 重连次数
+□ 限流：每分钟最大编译次数（防 Roslyn 内存泄漏）
+```
+
+**小结**：JSON 是运维最友好的策略——延迟可预测、错误可定位、操作可回滚、审计可枚举。exec-csharp 在运维侧是最大挑战——LLM 输出不确定性 + Roslyn 编译开销 + COM 状态风险，三重不确定性叠加，需要完善的监控、日志、降级机制才能上生产。
+
+---
+
+### 11.8 六维度总结
+
+```
+                  JSON        template     codeact      exec-csharp
+                  ────        ────────     ───────      ───────────
+安全性            ████████     ███████      █████        ██
+性能(单操作)      ████████     ████████     ███          ██
+性能(多步)        █████        █████        ███          █████████
+开发成本          ███          ███          █████        █████████
+LLM适配           ███          ███          █████        █████████
+部署简单度        █████████    ███████      █████        █████
+运维/生产化       █████████    ███████      █████        ███
+
+综合:  JSON = 稳如老狗     exec-csharp = 猛如猎豹
+       适合生产兜底         适合 Agent 主力
+```
+
+> **最终建议**：生产环境采用**混合策略**——
+> - 🛡️ **JSON 做兜底**：默认路径，稳定可靠，运维友好
+> - 🚀 **exec-csharp 做主力**：Agent 场景 ≥ 3 步时启用，加沙箱防护
+> - ⚡ **template 做加速**：高频重复操作场景，缓存命中后极速
+> - 📉 **降级链**：exec-csharp → JSON（失败自动降级）
+
+---
+
+## 12. 结论
+
+> **性能维度**：exec-csharp 是 Agent/LLM 场景的最优策略——把整个编辑计划写成 1 段 C# 脚本，用 1 次 Roslyn 编译换取 N-1 次往返节省。user_flow（5 步）只需 121ms（headless）/ 102ms（headed），比 JSON 快 4-6 倍。单操作和高频重复场景下，JSON（~15ms）和 template（缓存后 ~12ms）仍然最快。
 >
-> **鲁棒性方面**：JSON 最稳，exec-csharp 最危险但可通过沙箱+超时+降级兜底控制风险。生产环境建议混合策略——简单走 JSON，复杂走 exec-csharp（带防护），高频走 template。
+> **安全维度**：JSON 最稳，exec-csharp 最危险但可通过沙箱+超时+降级兜底控制风险。
 >
-> **四策略共存互补，不是相互替代**。
+> **开发维度**：exec-csharp 开发成本最低——只维护 PptApi，新操作由 LLM 运行时组合，无需写码发版。
+>
+> **LLM 适配**：exec-csharp 最契合 LLM 工作方式——代码生成是强项，比 JSON schema 生成更可靠。
+>
+> **部署运维**：JSON 最简单最可控，exec-csharp 需要完善的监控/日志/降级机制。
+>
+> **四策略共存互补，不是相互替代。生产环境推荐 JSON 兜底 + exec-csharp 主力 + template 加速的混合架构。**
