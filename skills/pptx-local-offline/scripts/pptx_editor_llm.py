@@ -18,6 +18,10 @@ PPTX 编辑器 — LLM 意图解析 + COM 执行 (Windows Only)
   python pptx_editor_llm.py <pptx文件> --exec-actions '[{"action":"modify_font","slide":1,"target":{"type":"title"},"params":{"bold":true}}]'
   python pptx_editor_llm.py <pptx文件> --exec-actions actions.json --dry-run
 
+  # 本地C#脚本执行 (CodeAct, LLM 直接产出 C# 脚本而非 JSON, 无需 API)
+  python pptx_editor_llm.py <pptx文件> --exec-csharp edit.cs --backend csharp
+  python pptx_editor_llm.py <pptx文件> --exec-csharp 'SetFont(Title(1), bold: true);' --output out.pptx
+
   # 查看结构
   python pptx_editor_llm.py <pptx文件> --inspect
 
@@ -1130,6 +1134,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="仅解析意图，不执行")
     parser.add_argument("--exec-script", metavar="SCRIPT", help="执行Python脚本文件 (脚本内可用 ppt, filepath 变量, 无需API)")
     parser.add_argument("--exec-actions", metavar="JSON", help="执行JSON动作数组 (字符串或.json文件路径, 无需API)")
+    parser.add_argument("--exec-csharp", metavar="CSHARP", help="CodeAct: 执行C#脚本 (字符串或.cs文件), LLM 直接产出脚本, 经 host PptApi 单次执行, 无需API")
     parser.add_argument("--interactive-actions", metavar="JSON", nargs="?", const="-", help="保持同一个 COM 会话，持续从 stdin 读取 JSON 动作命令")
     parser.add_argument("--interactive-script", metavar="SCRIPT", nargs="?", const="-", help="保持同一个 COM 会话，持续从 stdin 读取脚本命令")
     parser.add_argument("--api-base", help="API 端点")
@@ -1156,7 +1161,7 @@ def main():
             print("\n" + json.dumps(structure, ensure_ascii=False, indent=2))
         finally:
             _close_after_grace(ppt, modified=False)
-        if not args.exec_script and not args.exec_actions:
+        if not args.exec_script and not args.exec_actions and not args.exec_csharp:
             return
 
     if args.interactive_actions is not None:
@@ -1233,6 +1238,59 @@ def main():
             print("✅ 脚本执行完成")
         except Exception as e:
             print(f"❌ 脚本执行失败: {e}")
+            import traceback; traceback.print_exc()
+            sys.exit(1)
+        finally:
+            _close_after_grace(ppt, modified=modified)
+        return
+
+    if args.exec_csharp:
+        # CodeAct: the LLM authors a C# script directly (no JSON). Run it in ONE
+        # round-trip against the host's PptApi surface via code_act().
+        _CSHARP_BACKENDS = ("csharp", "csharp-codeact", "csharp-template")
+        backend = args.backend
+        if backend not in _CSHARP_BACKENDS:
+            print(f"ℹ️  --exec-csharp 需要 C# host backend，已自动从 '{backend}' 切换到 'csharp'")
+            backend = "csharp"
+        raw = args.exec_csharp
+        # Accept either an inline C# string or a path to a .cs/.csx file.
+        if os.path.exists(raw):
+            with open(raw, "r", encoding="utf-8") as f:
+                script_code = f.read()
+            print(f"🔧 执行 C# 脚本: {raw}")
+        else:
+            script_code = raw
+            print("🔧 执行 C# 脚本 (内联)")
+        ppt = create_backend(backend, visible=args.headed, vba_module=args.vba_module)
+        modified = False
+        try:
+            ppt.open(args.pptx_file)
+            if not hasattr(ppt, "code_act"):
+                print(f"❌ backend '{backend}' 不支持 C# 脚本执行 (code_act)")
+                sys.exit(1)
+            if args.notes_progress:
+                _write_progress_note(
+                    ppt,
+                    "开始执行 C# 脚本",
+                    note_slide=args.note_slide,
+                    append=True,
+                )
+            output = ppt.code_act(script_code)
+            if output:
+                print(output)
+            if args.notes_progress:
+                _write_progress_note(
+                    ppt,
+                    "C# 脚本执行完成",
+                    note_slide=args.note_slide,
+                    append=True,
+                )
+            if not args.dry_run:
+                ppt.save(args.output)
+                modified = True
+            print("✅ C# 脚本执行完成")
+        except Exception as e:
+            print(f"❌ C# 脚本执行失败: {e}")
             import traceback; traceback.print_exc()
             sys.exit(1)
         finally:
