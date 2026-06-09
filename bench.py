@@ -120,7 +120,8 @@ def run(backend_name):
             results["batch_mixed"] = time.perf_counter() - t0
             print(f"  batch mixed               {fmt(results['batch_mixed'])}")
 
-        else:  # vba / csharp — both drive ops through the execute_action JSON protocol
+        else:  # vba / csharp / csharp-codeact / *-addin — drive ops through execute_action
+                # (csharp-codeact transparently routes each action through execute_code/Roslyn)
             # find via inspect (already done)
             results["find_8_titles"] = results["inspect"]
             print(f"  find (via inspect)        {fmt(results['find_8_titles'])}")
@@ -180,6 +181,18 @@ def run(backend_name):
             ppt.set_notes(1, "batch done")
             results["batch_mixed"] = time.perf_counter() - t0
             print(f"  batch mixed               {fmt(results['batch_mixed'])}")
+
+            if backend_name == "csharp-codeact" and hasattr(ppt, "run_actions"):
+                # CodeAct's win: the same 8 modify_font ops compiled into ONE C#
+                # script and run in a SINGLE round-trip (vs modify_font_8 above,
+                # which is 8 separate execute_code round-trips).
+                t0 = time.perf_counter()
+                ppt.run_actions([
+                    {"action": "modify_font", "slide": si, "target": {"name": nm}, "params": {"bold": True}}
+                    for si, nm in TITLE_SHAPES.items()
+                ])
+                results["batch8_codeact_1rt"] = time.perf_counter() - t0
+                print(f"  batch 8 (codeact 1-rt)    {fmt(results['batch8_codeact_1rt'])}")
 
     finally:
         try:

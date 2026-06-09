@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Microsoft.CodeAnalysis.CSharp.Scripting;
+using Microsoft.CodeAnalysis.Scripting;
 
 namespace PptInteropHost;
 
@@ -114,6 +116,11 @@ internal static class Program
                 }
 
                 return ExecuteAction(req);
+
+            case "execute_code":
+                // CodeAct: run a single C# script in-process against the PptApi surface,
+                // collapsing many execute_action round-trips into one execution.
+                return ExecuteCode(GetStr(req, "code", ""));
 
             case "set_notes":
                 return SetNotes(GetInt(req, "slide", 1), GetStr(req, "text", ""));
@@ -341,6 +348,46 @@ internal static class Program
         catch
         {
         }
+    }
+
+    // ---------- CodeAct: execute_code ----------
+
+    // Cache the compiled-script options/references so repeated execute_code calls
+    // do not re-resolve metadata references on every request.
+    private static ScriptOptions _scriptOptions;
+
+    private static object ExecuteCode(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            throw new ArgumentException("缺少 code");
+        }
+
+        if (_prs == null)
+        {
+            throw new InvalidOperationException("尚未 open 演示文稿，无法执行脚本");
+        }
+
+        _scriptOptions ??= ScriptOptions.Default
+            .WithReferences(
+                typeof(object).Assembly,                                          // System.Private.CoreLib
+                typeof(Enumerable).Assembly,                                       // System.Linq
+                typeof(Microsoft.CSharp.RuntimeBinder.RuntimeBinderException).Assembly, // dynamic support
+                typeof(PptApi).Assembly)                                           // this host (PptApi)
+            .WithImports("System", "System.Linq", "System.Collections.Generic");
+
+        var api = new PptApi(_app, _prs);
+
+        try
+        {
+            CSharpScript.RunAsync(code, _scriptOptions, globals: api).GetAwaiter().GetResult();
+        }
+        catch (CompilationErrorException ce)
+        {
+            throw new InvalidOperationException("脚本编译失败: " + string.Join(" | ", ce.Diagnostics));
+        }
+
+        return new Dictionary<string, object> { ["output"] = api.Output };
     }
 
     // ---------- action dispatch ----------

@@ -19,7 +19,7 @@ except Exception:
     pass
 
 
-SUPPORTED_BACKENDS = ("pywin32", "vba", "csharp", "csharp-addin", "pywin32-addin")
+SUPPORTED_BACKENDS = ("pywin32", "vba", "csharp", "csharp-codeact", "csharp-addin", "pywin32-addin")
 
 
 def add_backend_arguments(parser):
@@ -27,7 +27,7 @@ def add_backend_arguments(parser):
         "--backend",
         choices=SUPPORTED_BACKENDS,
         default=os.environ.get("PPTX_EDITOR_BACKEND", "pywin32"),
-        help="底层执行策略: pywin32(默认)、vba 或 csharp",
+        help="底层执行策略: pywin32(默认)、vba、csharp、csharp-codeact、csharp-addin、pywin32-addin",
     )
     parser.add_argument(
         "--vba-module",
@@ -46,6 +46,8 @@ def create_backend(name="pywin32", visible=False, vba_module="PptEditorBridge", 
         return PowerPointVBA(visible=visible, macro_module=vba_module)
     if backend == "csharp":
         return PowerPointCSharp(visible=visible, host_exe=csharp_host)
+    if backend == "csharp-codeact":
+        return PowerPointCSharpCodeAct(visible=visible, host_exe=csharp_host)
     if backend == "csharp-addin":
         return PowerPointCSharpAddin(visible=visible)
     if backend == "pywin32-addin":
@@ -201,6 +203,148 @@ class PowerPointCSharp:
 
     def execute_action(self, action_payload):
         return self._rpc({"cmd": "execute_action", "action": action_payload})
+
+    def code_act(self, script):
+        """CodeAct: run ONE C# script in-process against the host's PptApi surface.
+
+        Collapses many execute_action round-trips into a single execution. The
+        script is plain C# evaluated by Roslyn inside PptInteropHost; it can call
+        PptApi members directly (Print, SlideCount, Title, SetFont, AddTextbox,
+        ...) and reach raw COM via App/Prs. Returns the script's Print() output.
+        """
+        result = self._rpc({"cmd": "execute_code", "code": script})
+        if isinstance(result, dict):
+            return result.get("output", "")
+        return result or ""
+
+
+def _cs_str(value):
+    """Encode a Python value as a C# double-quoted string literal."""
+    s = "" if value is None else str(value)
+    s = (
+        s.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
+    return f'"{s}"'
+
+
+def _cs_num(value):
+    """Render a numeric param as a C# numeric literal."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return repr(value) if isinstance(value, float) else str(value)
+
+
+def _cs_bool(value):
+    return "true" if value else "false"
+
+
+class PowerPointCSharpCodeAct(PowerPointCSharp):
+    """CodeAct strategy over the same C# host (selectable via --backend csharp-codeact).
+
+    Same persistent PptInteropHost.exe and NDJSON protocol as ``csharp``; only the
+    execution path differs. Instead of dispatching each action as its own
+    ``execute_action`` JSON round-trip, actions are compiled to C# against the host's
+    PptApi surface and run via ``execute_code`` (Roslyn) — letting N operations
+    collapse into a SINGLE round-trip (see ``run_actions``).
+
+    Actions / targets the PptApi surface can't express fall back to the JSON
+    ``execute_action`` path, so this stays a drop-in superset of ``csharp``.
+    """
+
+    def _target_expr(self, slide, target):
+        """A C# expression returning the targeted shape (or null), or None if PptApi
+        can't resolve this target kind."""
+        if not target:
+            return None
+        if target.get("type") == "title":
+            return f"Title({slide})"
+        if "name" in target:
+            return f"FindByName({slide}, {_cs_str(target['name'])})"
+        if "id" in target:
+            return f"FindById({slide}, {int(target['id'])})"
+        if "text_match" in target or "text" in target:
+            return f"FindByText({slide}, {_cs_str(target.get('text_match') or target.get('text'))})"
+        if "index" in target:
+            return f"Shape({slide}, {int(target['index'])})"
+        return None  # position / unsupported target kind
+
+    def _action_to_csharp(self, action):
+        """Translate ONE JSON action to a C# statement, or None if unsupported."""
+        a = action.get("action")
+        slide = int(action.get("slide", 1))
+        params = action.get("params", {}) or {}
+        target = action.get("target")
+
+        if a == "add_textbox":
+            return (
+                f"AddTextbox({slide}, {_cs_str(params.get('text', ''))}, "
+                f"{_cs_num(params.get('left', 0))}, {_cs_num(params.get('top', 0))}, "
+                f"{_cs_num(params.get('width', 100))}, {_cs_num(params.get('height', 50))});"
+            )
+        if a == "set_notes":
+            return f"SetNotes({slide}, {_cs_str(params.get('text', ''))});"
+        if a == "set_slide_background" and "color" in params:
+            return f"SetSlideBackground({slide}, {int(params['color'])});"
+
+        tx = self._target_expr(slide, target)
+        if tx is None:
+            return None
+
+        if a == "modify_text":
+            return f"{{ var s = {tx}; if (s != null) SetText(s, {_cs_str(params.get('text', ''))}); }}"
+        if a == "modify_font":
+            args = []
+            if "font_size" in params:
+                args.append(f"size: {_cs_num(params['font_size'])}")
+            if "bold" in params:
+                args.append(f"bold: {_cs_bool(params['bold'])}")
+            if "italic" in params:
+                args.append(f"italic: {_cs_bool(params['italic'])}")
+            if "color" in params:
+                args.append(f"colorBgr: {int(params['color'])}")
+            if "font_name" in params:
+                args.append(f"name: {_cs_str(params['font_name'])}")
+            if not args:
+                return None
+            return f"{{ var s = {tx}; if (s != null) SetFont(s, {', '.join(args)}); }}"
+        if a == "move_shape":
+            return f"{{ var s = {tx}; if (s != null) Move(s, {_cs_num(params.get('left', 0))}, {_cs_num(params.get('top', 0))}); }}"
+        if a == "resize_shape":
+            return f"{{ var s = {tx}; if (s != null) Resize(s, {_cs_num(params.get('width', 0))}, {_cs_num(params.get('height', 0))}); }}"
+        if a == "set_fill" and "color" in params:
+            return f"{{ var s = {tx}; if (s != null) SetFill(s, {int(params['color'])}); }}"
+        if a == "set_border" and "color" in params:
+            weight = params.get("weight")
+            wexpr = f", {_cs_num(weight)}" if weight is not None else ""
+            return f"{{ var s = {tx}; if (s != null) SetBorder(s, {int(params['color'])}{wexpr}); }}"
+        if a == "delete_shape":
+            return f"{{ var s = {tx}; if (s != null) s.Delete(); }}"
+        return None
+
+    def execute_action(self, action_payload):
+        snippet = self._action_to_csharp(action_payload)
+        if snippet is None:
+            return super().execute_action(action_payload)
+        return self.code_act(snippet)
+
+    def run_actions(self, actions):
+        """Run a LIST of actions as ONE execute_code round-trip when possible.
+
+        If every action is translatable, the whole batch compiles to a single C#
+        script and executes in one round-trip. Otherwise it degrades to ordered
+        per-action execution (each still uses CodeAct where it can, else JSON),
+        preserving order and correctness.
+        """
+        snippets = [self._action_to_csharp(a) for a in actions]
+        if snippets and all(s is not None for s in snippets):
+            return self.code_act("\n".join(snippets))
+        for a in actions:
+            self.execute_action(a)
+        return ""
 
 
 def _resolve_powerpnt_exe():

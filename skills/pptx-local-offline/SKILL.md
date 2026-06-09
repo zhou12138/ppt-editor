@@ -45,16 +45,17 @@ python pptx_editor_llm.py deck.pptx --interactive
 
 本地 Claude Code 等 AI Agent 直接生成 Python 脚本，脚本内可用 `ppt`（已打开的 PowerPointCOM 实例）和 `filepath` 变量。**无需任何 API Key，无需 Ollama。**
 
-底层执行策略现在支持通过 `--backend pywin32|vba|csharp|csharp-addin|pywin32-addin` 切换。默认是 `pywin32`。五种策略构成「Python / C#」×「跨进程 / 进程内」的完整对照矩阵（VBA 作为进程内参照基准），主要用于性能对比，证明瓶颈在跨进程 IPC 而非语言本身：
+底层执行策略现在支持通过 `--backend pywin32|vba|csharp|csharp-codeact|csharp-addin|pywin32-addin` 切换。默认是 `pywin32`。六种策略主要用于性能对比，证明瓶颈在跨进程 IPC 而非语言本身：
 - `pywin32`：跨进程后期绑定 COM（基线，Python × 跨进程）。
 - `vba`：进程内 VBA 桥接宏（`Application.Run`），最快，进程内参照基准。
 - `csharp`：跨进程常驻 C# host（exe，JSON-RPC），与 pywin32 同机制但换 C#（C# × 跨进程）。
+- `csharp-codeact`：与 `csharp` 共用同一个常驻 host，但把每个动作翻译成 C# 脚本经 Roslyn(`execute_code`)执行；可把整批动作编译成**一段脚本一次往返**（CodeAct 模式，见下文）。
 - `csharp-addin`：**进程内** C# COM 加载项，运行在 POWERPNT.EXE 内（与 VBA 同机制，早绑定 interop），需先注册（见下文）（C# × 进程内）。
 - `pywin32-addin`：**进程内** Python（pywin32）COM 加载项，同样运行在 POWERPNT.EXE 内，复用同一套 `PowerPointCOM` 引擎，需先注册（见下文）（Python × 进程内）。
 
 > 矩阵说明：`pywin32`（Python/跨进程）与 `pywin32-addin`（Python/进程内）是同语言、仅执行位置不同的对照组；`csharp` 与 `csharp-addin` 同理。两组同时变快即可隔离出真正的变量——是跨进程 COM marshalling（IPC）而非 Python/C# 语言差异拖慢了 `pywin32`。
 
-`vba` 策略会通过 `Application.Run` 调用 VBA 桥接宏，适合已有宏工程或准备把动作下沉到 VBA 的场景。当前 `vba` / `csharp` / `csharp-addin` / `pywin32-addin` 策略推荐搭配 `--exec-actions` / `--interactive-actions` 使用；`--exec-script` 仍然只支持 Python。
+`vba` 策略会通过 `Application.Run` 调用 VBA 桥接宏，适合已有宏工程或准备把动作下沉到 VBA 的场景。当前 `vba` / `csharp` / `csharp-codeact` / `csharp-addin` / `pywin32-addin` 策略推荐搭配 `--exec-actions` / `--interactive-actions` 使用；`--exec-script` 仍然只支持 Python。
 
 > 两个进程内加载项（`csharp-addin` / `pywin32-addin`）与 VBA 一样，只在**交互式桌面会话**启动的 PowerPoint 里加载（PowerPoint 不会在无人值守 / 服务会话里加载加载项）。注册见下文「进程内加载项注册」。
 
@@ -171,7 +172,7 @@ JSON 会话模式会保持同一个 COM 会话，持续从 stdin 读取命令。
 | `--headed` | 以可见窗口模式打开 PowerPoint | 全部 |
 | `--notes-progress` | 自动把当前指令或脚本进度写到演讲者备注 | A, B, C |
 | `--note-slide` | 将进度备注固定写到指定页 | A, B, C |
-| `--backend` | 选择底层策略：`pywin32` / `vba` / `csharp` / `csharp-addin` / `pywin32-addin` | B, C |
+| `--backend` | 选择底层策略：`pywin32` / `vba` / `csharp` / `csharp-codeact` / `csharp-addin` / `pywin32-addin` | B, C |
 | `--vba-module` | 指定 VBA 桥接宏模块名，默认 `PptEditorBridge` | B, C |
 
 ## Backend 性能对比
@@ -277,10 +278,90 @@ Python 侧 `PowerPointCSharp` 会自动定位 exe，查找顺序：
 ← {"ok":true,"result":"bye"}
 ```
 
-支持的 `cmd`：`ping` / `open` / `inspect` / `inspect_slide` / `execute_action` / `set_notes` / `append_notes` / `save` / `quit`。
+支持的 `cmd`：`ping` / `open` / `inspect` / `inspect_slide` / `execute_action` / `execute_code` / `set_notes` / `append_notes` / `save` / `quit`。
 `execute_action` 的 `action` 负载与 VBA backend 完全一致（见模式 C 的 JSON 格式），target 定位语义对齐 pywin32（`type`/`name`/`text_match`/`position`/`index`/`id`）。
 
 > ⚠️ 颜色仍是 **BGR**（红=255/0xFF）；索引 **1-based**；PowerPoint 不允许 `Application.Visible=false`，host 已自动用无窗口方式打开演示文稿。
+
+### CodeAct 模式（`execute_code`）—— C# host 专属
+
+C# host 在 `execute_action`（逐条 JSON）之外，还提供第二种**编排策略** `execute_code`：把整个编辑计划写成**一段 C# 脚本一次发送**，host 用 Roslyn（`Microsoft.CodeAnalysis.CSharp.Scripting`）在进程内编译执行，对着 `PptApi` 契约编程。这就是 CodeAct 模式——把 `model → tool → model` 循环塌缩成一次执行。
+
+> `execute_action`（JSON）与 `execute_code`（CodeAct）是**同一个 host 上的两种编排策略**，区别只在调用方发哪种 `cmd`。CodeAct 本身不需要独立的 host：它复用 `--backend csharp` 那一个常驻进程、同一条 NDJSON 协议。为了方便 benchmark / CLI 对照，另提供了 `--backend csharp-codeact`（见下「调用方式 3」），它在**同一个 C# host** 上把每个 action 自动翻译成 `execute_code` 脚本。
+
+| 维度 | `execute_action`（JSON） | `execute_code`（CodeAct） |
+|------|--------------------------|---------------------------|
+| 粒度 | 一条 = 一个原子操作 | 一段 = 整个计划 |
+| 往返次数 | N 步 = N 次 stdin/stdout 往返 | N 步 = **1 次**往返 |
+| 编排者 | 调用方/LLM（model→tool→model 循环） | 脚本本身（一次执行内完成） |
+| 控制流 | 无（只能线性发命令） | 有：循环 / if / 过滤 / 聚合 / 中间变量 |
+| 取值再用 | 难（inspect→模型解析→再发下一条） | 易（`var t=Title(1)` 直接拿对象继续用） |
+| 契约 | JSON action 名 + params 字段 | `PptApi` 的 C# 方法签名（带类型/默认值） |
+| 灵活度 | 受限于已实现的 action 列表 | 任意逻辑 + 经 `App`/`Prs` 直达原始 COM |
+
+> 何时仍用 JSON：只有 1-2 步、每步需单独可见 / 审批、副作用要逐个确认时。
+
+**调用方式 1：Python backend 的 `code_act()`**
+
+`PowerPointCSharp` 暴露了 `code_act(script)` 便捷方法（仅 `csharp` backend 有），把脚本经 `execute_code` 发给 host，返回脚本里 `Print(...)` 的输出：
+
+```python
+from ppt_backend import create_backend
+ppt = create_backend("csharp")          # 同一个 host 进程
+ppt.open("deck.pptx")
+out = ppt.code_act('''
+    var t = Title(1);
+    SetText(t, "新标题");
+    SetFont(t, bold:true, colorBgr:0x0000FF);   // BGR 红
+    AddTextbox(1, "副标题", 60, 160, 400, 50);
+    Print($"slides={SlideCount}");
+''')
+ppt.save(); ppt.close()
+```
+
+> 注意：`code_act()` 是原生 Python / NDJSON 层的低阶 API，让你手写 C# 脚本。若只是想让标准 JSON action **走 CodeAct 路径**（而不手写 C#），用 `--backend csharp-codeact`（调用方式 3）更方便。
+
+**调用方式 3：`--backend csharp-codeact`（把 JSON action 自动翻译成 CodeAct）**
+
+`PowerPointCSharpCodeAct`（`PowerPointCSharp` 的子类）复用同一个 C# host，但把每个 JSON action 翻译成一段 `PptApi` C# 语句，经 `execute_code` 执行；`run_actions([...])` 会把一批可翻译的 action **拼成一段脚本、一次往返**（benchmark 里的 CodeAct 优势），遇到无法翻译的 action 自动降级回 JSON `execute_action`：
+
+```powershell
+# 与 --backend csharp 同一个 host；只是动作走 execute_code 而非逐条 JSON
+python scripts/pptx_editor_llm.py deck.pptx --exec-actions actions.json --backend csharp-codeact
+```
+
+```python
+from ppt_backend import create_backend
+ppt = create_backend("csharp-codeact")
+ppt.open("deck.pptx")
+ppt.run_actions([                              # N 条 action → 1 次往返
+    {"action": "modify_font", "slide": 1, "target": {"type": "title"}, "params": {"bold": True, "color": 255}},
+    {"action": "add_textbox", "slide": 1, "params": {"text": "副标题", "left": 60, "top": 160, "width": 400, "height": 50}},
+])
+ppt.save(); ppt.close()
+```
+
+**调用方式 2：直接发 `execute_code`（语言无关）**
+
+```text
+→ {"cmd":"execute_code","code":"var t=Title(1); SetText(t,\"新标题\"); SetFont(t,bold:true,colorBgr:0x0000FF); Print(\"done\");"}
+← {"ok":true,"result":{"output":"done\n"}}
+```
+
+**`PptApi` 契约（CodeAct 脚本可用 API）** —— 定义在 `PptApi.cs`。颜色 **BGR**、位置/大小单位 **points**（72pt=1in）、索引 **1-based**：
+
+| 分类 | 成员 |
+|------|------|
+| 输出 | `Print(msg)`、`Output` |
+| 导航 | `SlideCount`、`Slide(i)`、`Shape(slide,idx)`、`ShapeCount(slide)`、`FindByText(slide,contains)`、`FindByName(slide,name)`、`FindById(slide,id)`、`Title(slide)` |
+| 文本/字体 | `SetText(shp,text)`、`GetText(shp)`、`SetFont(shp, size?, bold?, italic?, colorBgr?, name?)` |
+| 几何 | `Move(shp,left,top)`、`Resize(shp,width,height)` |
+| 外观 | `SetFill(shp,bgr)`、`SetBorder(shp,bgr,weight?)`、`SetSlideBackground(slide,bgr)` |
+| 创建 | `AddTextbox(slide,text,left,top,width,height)` |
+| 备注 | `SetNotes(slide,text)` |
+| 原始 COM | `App`（Application）、`Prs`（Presentation） |
+
+> CodeAct 减少的是**调用方↔host 的往返次数**，与「进程内 vs 进程外」是两个正交维度——它仍是进程外 COM host。更完整的协议/契约/驱动示例见 `csharp_interop/PptInteropHost/README.md`。
 
 ## C# in-process add-in backend（`--backend csharp-addin`）
 

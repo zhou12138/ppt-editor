@@ -12,4 +12,10 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- CodeAct: Roslyn C# scripting so a single execute_code run can compile and
+         execute an in-process plan against the PptApi surface. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.11.0" />
+  </ItemGroup>
+
 </Project>
