@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text;
 
 namespace PptInteropHost;
@@ -294,4 +295,47 @@ public sealed class PptApi
             return false;
         }
     }
+}
+
+/// <summary>
+/// Globals object for the <c>execute_template</c> (Level 3) path.
+///
+/// Unlike <c>execute_code</c> — where every request ships a fresh script string
+/// that Roslyn must recompile (~200ms each) — the template path compiles ONE
+/// parameterized script per action type, caches the compiled
+/// <c>ScriptRunner&lt;object&gt;</c>, and re-invokes it with different values via
+/// this globals instance. Values arrive through <see cref="A"/> (params, already
+/// JSON-decoded) and <see cref="Shp"/> (the target shape resolved by the host),
+/// so the script TEXT never changes → the compile cost is paid once per type.
+/// </summary>
+public sealed class TemplateGlobals
+{
+    /// <summary>The wrapped COM helper surface (same methods as CodeAct).</summary>
+    public PptApi Api { get; }
+
+    /// <summary>Target shape resolved by the host for target-based actions (may be null).</summary>
+    public dynamic Shp;
+
+    /// <summary>Per-call argument bag (action params plus <c>slide</c>).</summary>
+    public Dictionary<string, object> A;
+
+    public TemplateGlobals(PptApi api)
+    {
+        Api = api;
+    }
+
+    /// <summary>True when key <paramref name="k"/> is present and non-null.</summary>
+    public bool Has(string k) => A != null && A.TryGetValue(k, out object v) && v != null;
+
+    /// <summary>Read an int arg (tolerant of JSON long/double).</summary>
+    public int I(string k) => Convert.ToInt32(A[k]);
+
+    /// <summary>Read a double arg (tolerant of JSON long/int).</summary>
+    public double D(string k) => Convert.ToDouble(A[k]);
+
+    /// <summary>Read a bool arg.</summary>
+    public bool B(string k) => Convert.ToBoolean(A[k]);
+
+    /// <summary>Read a string arg (empty string if missing/null).</summary>
+    public string S(string k) => A != null && A.TryGetValue(k, out object v) && v != null ? v.ToString() : string.Empty;
 }

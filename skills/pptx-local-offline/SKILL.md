@@ -45,17 +45,18 @@ python pptx_editor_llm.py deck.pptx --interactive
 
 本地 Claude Code 等 AI Agent 直接生成 Python 脚本，脚本内可用 `ppt`（已打开的 PowerPointCOM 实例）和 `filepath` 变量。**无需任何 API Key，无需 Ollama。**
 
-底层执行策略现在支持通过 `--backend pywin32|vba|csharp|csharp-codeact|csharp-addin|pywin32-addin` 切换。默认是 `pywin32`。六种策略主要用于性能对比，证明瓶颈在跨进程 IPC 而非语言本身：
+底层执行策略现在支持通过 `--backend pywin32|vba|csharp|csharp-codeact|csharp-template|csharp-addin|pywin32-addin` 切换。默认是 `pywin32`。七种策略主要用于性能对比，证明瓶颈在跨进程 IPC 而非语言本身：
 - `pywin32`：跨进程后期绑定 COM（基线，Python × 跨进程）。
 - `vba`：进程内 VBA 桥接宏（`Application.Run`），最快，进程内参照基准。
 - `csharp`：跨进程常驻 C# host（exe，JSON-RPC），与 pywin32 同机制但换 C#（C# × 跨进程）。
 - `csharp-codeact`：与 `csharp` 共用同一个常驻 host，但把每个动作翻译成 C# 脚本经 Roslyn(`execute_code`)执行；可把整批动作编译成**一段脚本一次往返**（CodeAct 模式，见下文）。
+- `csharp-template`：同一个 host 的 **Level 3 模板缓存**路径(`execute_template`)——每种 action type 只编译一次并缓存成 delegate，之后同类调用跳过 ~200ms 的 Roslyn 编译（见下文）。
 - `csharp-addin`：**进程内** C# COM 加载项，运行在 POWERPNT.EXE 内（与 VBA 同机制，早绑定 interop），需先注册（见下文）（C# × 进程内）。
 - `pywin32-addin`：**进程内** Python（pywin32）COM 加载项，同样运行在 POWERPNT.EXE 内，复用同一套 `PowerPointCOM` 引擎，需先注册（见下文）（Python × 进程内）。
 
 > 矩阵说明：`pywin32`（Python/跨进程）与 `pywin32-addin`（Python/进程内）是同语言、仅执行位置不同的对照组；`csharp` 与 `csharp-addin` 同理。两组同时变快即可隔离出真正的变量——是跨进程 COM marshalling（IPC）而非 Python/C# 语言差异拖慢了 `pywin32`。
 
-`vba` 策略会通过 `Application.Run` 调用 VBA 桥接宏，适合已有宏工程或准备把动作下沉到 VBA 的场景。当前 `vba` / `csharp` / `csharp-codeact` / `csharp-addin` / `pywin32-addin` 策略推荐搭配 `--exec-actions` / `--interactive-actions` 使用；`--exec-script` 仍然只支持 Python。
+`vba` 策略会通过 `Application.Run` 调用 VBA 桥接宏，适合已有宏工程或准备把动作下沉到 VBA 的场景。当前 `vba` / `csharp` / `csharp-codeact` / `csharp-template` / `csharp-addin` / `pywin32-addin` 策略推荐搭配 `--exec-actions` / `--interactive-actions` 使用；`--exec-script` 仍然只支持 Python。
 
 > 两个进程内加载项（`csharp-addin` / `pywin32-addin`）与 VBA 一样，只在**交互式桌面会话**启动的 PowerPoint 里加载（PowerPoint 不会在无人值守 / 服务会话里加载加载项）。注册见下文「进程内加载项注册」。
 
@@ -172,7 +173,7 @@ JSON 会话模式会保持同一个 COM 会话，持续从 stdin 读取命令。
 | `--headed` | 以可见窗口模式打开 PowerPoint | 全部 |
 | `--notes-progress` | 自动把当前指令或脚本进度写到演讲者备注 | A, B, C |
 | `--note-slide` | 将进度备注固定写到指定页 | A, B, C |
-| `--backend` | 选择底层策略：`pywin32` / `vba` / `csharp` / `csharp-codeact` / `csharp-addin` / `pywin32-addin` | B, C |
+| `--backend` | 选择底层策略：`pywin32` / `vba` / `csharp` / `csharp-codeact` / `csharp-template` / `csharp-addin` / `pywin32-addin` | B, C |
 | `--vba-module` | 指定 VBA 桥接宏模块名，默认 `PptEditorBridge` | B, C |
 
 ## Backend 性能对比
@@ -362,6 +363,42 @@ ppt.save(); ppt.close()
 | 原始 COM | `App`（Application）、`Prs`（Presentation） |
 
 > CodeAct 减少的是**调用方↔host 的往返次数**，与「进程内 vs 进程外」是两个正交维度——它仍是进程外 COM host。更完整的协议/契约/驱动示例见 `csharp_interop/PptInteropHost/README.md`。
+
+### Level 3：模板编译缓存（`--backend csharp-template` / `execute_template`）
+
+`execute_code`（CodeAct）每次都把一段**新的脚本字符串**发给 host，Roslyn 每次都要重新编译（~200–600ms/次）。逐条执行时这笔编译开销会乘以动作数，反而比 JSON 还慢——CodeAct 真正划算只在「整批拼成一段、一次编译」时。
+
+Level 3 换一个思路消掉编译开销：**每种 action type 只编译一次**。host 为每个 type 预置一段**参数化模板**（脚本文本固定，值通过 globals 传入），首次编译后缓存成 `ScriptRunner<object>` delegate，之后同类调用直接 `Invoke`，跳过编译：
+
+```text
+首次该 type:  Create + CreateDelegate   ~200ms（编译一次）
+之后同 type:  runner(globals)           ~0ms 编译 + ~10ms 执行
+```
+
+实现要点（`Program.cs` + `PptApi.cs`）：
+- 新命令 `execute_template`：host 按 action type 取/建缓存的 delegate（`Dictionary<string, ScriptRunner<object>>`）。
+- 模板**不内联字面量**——值经 `TemplateGlobals`（`Shp` 目标形状 + `A` 参数字典）传入，所以脚本文本恒定、编译只发生一次。
+- 目标解析（`type`/`name`/`text_match`/`position`/`index`/`id`）仍由 host 端 `FindFirstShape` 完成，与 pywin32 语义对齐。
+- 没有对应模板的 action 自动回退到 JSON `execute_action`，行为是基础 C# backend 的超集。
+
+调用方式与 `csharp` 完全一致，只换 backend 名：
+
+```powershell
+python scripts/pptx_editor_llm.py deck.pptx --exec-actions actions.json --backend csharp-template
+```
+
+```python
+from ppt_backend import create_backend
+ppt = create_backend("csharp-template")
+ppt.open("deck.pptx")
+ppt.execute_action({"action": "modify_font", "slide": 1, "target": {"type": "title"},
+                    "params": {"bold": True, "color": 255}})   # 首次该 type：编译+缓存
+ppt.execute_action({"action": "modify_font", "slide": 2, "target": {"name": "TextBox 2"},
+                    "params": {"italic": True}})                # 同 type：直接复用 delegate
+ppt.save(); ppt.close()
+```
+
+> 三者关系：`csharp`（JSON，无编译，N 往返）→ `csharp-codeact`（CodeAct，可 1 往返但每段重编）→ `csharp-template`（N 往返，但每 type 只编一次）。`run_actions(...)` 减的是**往返次数**，模板缓存减的是**每次编译开销**——两个正交维度。实测首次 ~388ms、缓存后 ~11ms（同一 type 第 2 次起）。
 
 ## C# in-process add-in backend（`--backend csharp-addin`）
 

@@ -122,6 +122,11 @@ internal static class Program
                 // collapsing many execute_action round-trips into one execution.
                 return ExecuteCode(GetStr(req, "code", ""));
 
+            case "execute_template":
+                // Level 3: per-action-type compiled template, cached as a delegate.
+                // Compile once (~200ms), then re-invoke with new values (~0 compile).
+                return ExecuteTemplate(req);
+
             case "set_notes":
                 return SetNotes(GetInt(req, "slide", 1), GetStr(req, "text", ""));
 
@@ -389,6 +394,135 @@ internal static class Program
 
         return new Dictionary<string, object> { ["output"] = api.Output };
     }
+
+    // ---------- Level 3: compiled-template cache (execute_template) ----------
+
+    // One compiled ScriptRunner per action type. The script TEXT is fixed per
+    // type; only the values (via TemplateGlobals) change between calls, so Roslyn
+    // compilation happens once per type instead of once per request.
+    private static readonly Dictionary<string, ScriptRunner<object>> _templateCache = new();
+    private static ScriptOptions _templateOptions;
+
+    // Slide-scoped actions (no target shape to resolve).
+    private static readonly HashSet<string> _slideScopedTemplates = new()
+    {
+        "add_textbox", "set_notes", "set_slide_background",
+    };
+
+    private static object ExecuteTemplate(JsonElement req)
+    {
+        if (_prs == null)
+        {
+            throw new InvalidOperationException("尚未 open 演示文稿，无法执行模板");
+        }
+
+        JsonElement action = req.TryGetProperty("action", out JsonElement a) && a.ValueKind == JsonValueKind.Object
+            ? a
+            : req;
+        string type = GetStr(action, "action", "");
+        if (string.IsNullOrEmpty(type))
+        {
+            throw new ArgumentException("缺少 action");
+        }
+
+        ScriptRunner<object> runner = GetTemplateRunner(type);
+
+        int slide = GetActionSlide(action);
+        dynamic shp = null;
+        if (!_slideScopedTemplates.Contains(type))
+        {
+            JsonElement target = action.TryGetProperty("target", out JsonElement t) ? t : default;
+            shp = FindFirstShape(slide, target);
+        }
+
+        var args = new Dictionary<string, object> { ["slide"] = slide };
+        if (action.TryGetProperty("params", out JsonElement ps) && ps.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty p in ps.EnumerateObject())
+            {
+                args[p.Name] = JsonToObject(p.Value);
+            }
+        }
+
+        var globals = new TemplateGlobals(new PptApi(_app, _prs)) { Shp = shp, A = args };
+        try
+        {
+            runner(globals).GetAwaiter().GetResult();
+        }
+        catch (CompilationErrorException ce)
+        {
+            throw new InvalidOperationException("模板编译失败: " + string.Join(" | ", ce.Diagnostics));
+        }
+
+        return new Dictionary<string, object> { ["output"] = globals.Api.Output, ["cached"] = true };
+    }
+
+    private static ScriptRunner<object> GetTemplateRunner(string type)
+    {
+        if (_templateCache.TryGetValue(type, out ScriptRunner<object> cached))
+        {
+            return cached;
+        }
+
+        string body = BuildTemplate(type)
+                      ?? throw new InvalidOperationException($"模板未支持的 action: {type}");
+
+        _templateOptions ??= ScriptOptions.Default
+            .WithReferences(
+                typeof(object).Assembly,
+                typeof(Enumerable).Assembly,
+                typeof(Microsoft.CSharp.RuntimeBinder.RuntimeBinderException).Assembly,
+                typeof(PptApi).Assembly)
+            .WithImports("System", "System.Linq", "System.Collections.Generic");
+
+        ScriptRunner<object> runner = CSharpScript
+            .Create<object>(body, _templateOptions, globalsType: typeof(TemplateGlobals))
+            .CreateDelegate();
+        _templateCache[type] = runner;
+        return runner;
+    }
+
+    // Parameterized script bodies. Values are pulled from the globals (Shp / A)
+    // so the text is constant per type and compiles exactly once.
+    private static string BuildTemplate(string type) => type switch
+    {
+        "modify_text" =>
+            "if (Shp != null) Api.SetText(Shp, S(\"text\"));",
+        "modify_font" =>
+            "if (Shp != null) Api.SetFont(Shp, " +
+            "Has(\"font_size\") ? (double?)D(\"font_size\") : null, " +
+            "Has(\"bold\") ? (bool?)B(\"bold\") : null, " +
+            "Has(\"italic\") ? (bool?)B(\"italic\") : null, " +
+            "Has(\"color\") ? (int?)I(\"color\") : null, " +
+            "Has(\"font_name\") ? S(\"font_name\") : null);",
+        "move_shape" =>
+            "if (Shp != null) Api.Move(Shp, D(\"left\"), D(\"top\"));",
+        "resize_shape" =>
+            "if (Shp != null) Api.Resize(Shp, D(\"width\"), D(\"height\"));",
+        "set_fill" =>
+            "if (Shp != null) Api.SetFill(Shp, I(\"color\"));",
+        "set_border" =>
+            "if (Shp != null) Api.SetBorder(Shp, I(\"color\"), Has(\"weight\") ? (double?)D(\"weight\") : null);",
+        "delete_shape" =>
+            "if (Shp != null) Shp.Delete();",
+        "add_textbox" =>
+            "Api.AddTextbox(I(\"slide\"), S(\"text\"), D(\"left\"), D(\"top\"), D(\"width\"), D(\"height\"));",
+        "set_notes" =>
+            "Api.SetNotes(I(\"slide\"), S(\"text\"));",
+        "set_slide_background" =>
+            "Api.SetSlideBackground(I(\"slide\"), I(\"color\"));",
+        _ => null,
+    };
+
+    private static object JsonToObject(JsonElement el) => el.ValueKind switch
+    {
+        JsonValueKind.String => el.GetString(),
+        JsonValueKind.Number => el.TryGetInt64(out long l) ? (object)l : el.GetDouble(),
+        JsonValueKind.True => true,
+        JsonValueKind.False => false,
+        JsonValueKind.Null => null,
+        _ => el.ToString(),
+    };
 
     // ---------- action dispatch ----------
 

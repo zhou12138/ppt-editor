@@ -19,7 +19,7 @@ except Exception:
     pass
 
 
-SUPPORTED_BACKENDS = ("pywin32", "vba", "csharp", "csharp-codeact", "csharp-addin", "pywin32-addin")
+SUPPORTED_BACKENDS = ("pywin32", "vba", "csharp", "csharp-codeact", "csharp-template", "csharp-addin", "pywin32-addin")
 
 
 def add_backend_arguments(parser):
@@ -27,7 +27,7 @@ def add_backend_arguments(parser):
         "--backend",
         choices=SUPPORTED_BACKENDS,
         default=os.environ.get("PPTX_EDITOR_BACKEND", "pywin32"),
-        help="底层执行策略: pywin32(默认)、vba、csharp、csharp-codeact、csharp-addin、pywin32-addin",
+        help="底层执行策略: pywin32(默认)、vba、csharp、csharp-codeact、csharp-template、csharp-addin、pywin32-addin",
     )
     parser.add_argument(
         "--vba-module",
@@ -48,6 +48,8 @@ def create_backend(name="pywin32", visible=False, vba_module="PptEditorBridge", 
         return PowerPointCSharp(visible=visible, host_exe=csharp_host)
     if backend == "csharp-codeact":
         return PowerPointCSharpCodeAct(visible=visible, host_exe=csharp_host)
+    if backend == "csharp-template":
+        return PowerPointCSharpTemplate(visible=visible, host_exe=csharp_host)
     if backend == "csharp-addin":
         return PowerPointCSharpAddin(visible=visible)
     if backend == "pywin32-addin":
@@ -345,6 +347,44 @@ class PowerPointCSharpCodeAct(PowerPointCSharp):
         for a in actions:
             self.execute_action(a)
         return ""
+
+
+class PowerPointCSharpTemplate(PowerPointCSharp):
+    """Level 3 strategy: route each action through the host's ``execute_template``
+    command, which compiles ONE parameterized C# script per action type and
+    caches the compiled delegate.
+
+    Unlike ``csharp-codeact`` (which ships a fresh script string per call, so
+    Roslyn recompiles every time), here the script TEXT is fixed per type and
+    only the values change — so compilation is paid once per action type and
+    every subsequent call of that type skips it. Same N round-trips as plain
+    ``csharp``; the win is eliminating per-call compile overhead.
+
+    Actions the host has no template for fall back to the JSON ``execute_action``
+    path, so behaviour stays a superset of the base C# backend.
+    """
+
+    # Mirror the host's BuildTemplate switch so we can decide locally whether a
+    # given action has a cached template (else fall back to JSON execute_action).
+    _TEMPLATED = frozenset({
+        "modify_text", "modify_font", "move_shape", "resize_shape",
+        "set_fill", "set_border", "delete_shape", "add_textbox",
+        "set_notes", "set_slide_background",
+    })
+
+    def execute_action(self, action_payload):
+        name = (action_payload or {}).get("action")
+        if name in self._TEMPLATED:
+            return self._rpc({"cmd": "execute_template", "action": action_payload})
+        return super().execute_action(action_payload)
+
+    def run_actions(self, actions):
+        """Run a list of actions; each templated action reuses its cached delegate
+        (compile only on first use of each type)."""
+        out = ""
+        for a in actions:
+            out = self.execute_action(a)
+        return out
 
 
 def _resolve_powerpnt_exe():
