@@ -2,6 +2,10 @@
 
 本文对比 PPT Editor 中三种基于 **C# Interop host** 的执行策略。三者**共享同一套底层基础设施**，区别只在「脚本怎么来、怎么编译、怎么往返」这一层。
 
+> **脚本从哪来有两种来源**：
+> - **机器生成**：上游产出 JSON，由 Python（codeact 的 `_action_to_csharp`）或 host（template 的固定模板）把 JSON 翻译成 C#。
+> - **LLM 直出**：LLM 直接写 C# 脚本，经 CLI 入口 `--exec-csharp` 走 `code_act`（`execute_code`）一次执行 —— 见 [§4.4](#44---exec-csharpllm-直接产出-c-脚本)。
+
 > 相关源码：
 > - host：[`csharp_interop/PptInteropHost/Program.cs`](../csharp_interop/PptInteropHost/Program.cs)、[`PptApi.cs`](../csharp_interop/PptInteropHost/PptApi.cs)
 > - Python backend：[`ppt_backend.py`](../ppt_backend.py)（`PowerPointCSharp` / `PowerPointCSharpCodeAct` / `PowerPointCSharpTemplate`）
@@ -33,7 +37,7 @@ flowchart LR
 | 维度 | `csharp` | `csharp-codeact` | `csharp-template` |
 |------|----------|------------------|-------------------|
 | host 命令 | `execute_action` | `execute_code` | `execute_template` |
-| 脚本来源 | 无脚本（原生派发） | Python 端**生成 C# 字符串** | host 端**预置固定模板** |
+| 脚本来源 | 无脚本（原生派发） | Python `_action_to_csharp` 生成 C# 串 **／ LLM 经 `--exec-csharp` 直出** | host 端**预置固定模板** |
 | 值如何进入 | JSON params 字段 | **内联**进脚本文本 | 经 globals 传入（`Shp`+`A`），文本不含值 |
 | 脚本文本 | —— | 每次都不同 | 每种 type 恒定 |
 | 是否编译 | 否（直接调 COM） | **每次都编译**（~200ms） | **每 type 编译一次**，之后缓存复用 |
@@ -147,6 +151,42 @@ sequenceDiagram
     Note over Py,COM: 第 2 次 modify_font：直接复用 runner，仅 ~11ms
 ```
 
+### 4.4 `--exec-csharp`（LLM 直接产出 C# 脚本）
+
+前三条路径里，进 host 的 C# 都是**机器翻译**出来的（codeact 由 Python 从 JSON 拼、template 由 host 套固定模板）。`--exec-csharp` 是另一个入口：**LLM 直接把整段 C# 写好**，不经 JSON，Python 只负责读入（内联字符串或 `.cs` 文件）并通过 `code_act` 一次性发给 host 执行。
+
+这等价于「codeact 的 `execute_code`，但脚本作者是 LLM 而不是 `_action_to_csharp`」。脚本对着 host 的 `PptApi` 契约编程，可用循环 / 条件 / 中间变量 / 直达原始 COM。
+
+> 实现：[`pptx_editor_llm.py`](../pptx_editor_llm.py) 中 `--exec-csharp` 分支 → `ppt.code_act(script)`。非 C# backend 会自动切到 `csharp`；`csharp` / `csharp-codeact` / `csharp-template` 均受支持（都继承 `code_act`）。
+
+```bash
+# 内联脚本
+python pptx_editor_llm.py deck.pptx --exec-csharp 'SetFont(Title(1), bold: true);' --backend csharp
+# 或 .cs 文件
+python pptx_editor_llm.py deck.pptx --exec-csharp edit.cs --output out.pptx
+```
+
+```mermaid
+sequenceDiagram
+    participant LLM as LLM
+    participant Py as Python (--exec-csharp)
+    participant Host as PptInteropHost
+    participant Roslyn as Roslyn
+    participant COM as PowerPoint COM
+
+    LLM->>Py: 直接产出 C# 脚本（非 JSON）
+    Py->>Py: 读入内联串 / .cs 文件
+    Py->>Host: {cmd:execute_code, code:"<LLM 写的 C#>"}
+    Host->>Roslyn: CSharpScript.RunAsync(code)  // 编译一次
+    Roslyn->>COM: 对着 PptApi 顺序执行
+    COM-->>Roslyn: ok
+    Roslyn-->>Host: output
+    Host-->>Py: {ok:true, result:{output}}  // 1 次往返
+    Py->>Py: 打印 output、保存
+```
+
+> 对比 §4.2：往返与编译特性和 codeact 完全一致（1 次往返、每次脚本编译一次）；唯一区别是**脚本由 LLM 直接撰写**，而非 Python 从 JSON 翻译。
+
 ---
 
 ## 5. 两条正交的优化轴
@@ -184,6 +224,11 @@ sequenceDiagram
 - codeact：在 Python 端 `_target_expr` 决定生成 `Title(1)` / `FindByName(...)` / `FindByText(...)`。
 - template：host 端 `FindFirstShape` 统一解析（`type`/`name`/`text_match`/`position`/`index`/`id`），结果塞进 `globals.Shp`，与 pywin32 语义对齐。
 
+### 脚本作者：机器 vs LLM
+
+- **机器生成**（`--exec-actions`）：上游给 JSON，codeact 由 `_action_to_csharp` 翻译、template 套固定模板 —— C# 是程序拼出来的，可控、可校验。
+- **LLM 直出**（`--exec-csharp`）：LLM 直接写 C#，跳过 JSON 这一中间表示，灵活性最高（任意控制流 / 直达 COM），但脚本正确性依赖 LLM 与 `PptApi` 契约。两者都落到同一个 `execute_code`，host 侧无差别。
+
 ---
 
 ## 7. 选型建议
@@ -193,6 +238,7 @@ sequenceDiagram
 | 单步、需逐个审批/可见副作用 | `csharp`（JSON） | 简单、无编译、每步独立 |
 | 一个计划多步、需要控制流（循环/条件/取值再用） | `csharp-codeact` + `run_actions` | 1 次往返，脚本即编排者 |
 | 大批量、重复同类动作（如批量改字体） | `csharp-template` | 编译一次，后续 ~0 |
+| 让 LLM 直接写 C#、跳过 JSON 中间层 | `--exec-csharp`（任意 csharp backend） | 灵活性最高，脚本即 LLM 产物 |
 | 跨语言直接驱动 host | 任意（发对应 `cmd`） | 协议语言无关 |
 
 ---
@@ -202,5 +248,6 @@ sequenceDiagram
 - **`csharp`**：把动作当 JSON 命令，host 原生派发 —— 无脚本、无编译的基线。
 - **`csharp-codeact`**：把整个计划写成一段 C# 程序、一次跑完 —— 动态生成脚本，省往返、要灵活控制流时用。
 - **`csharp-template`**：把每类动作的程序编译一次、反复套不同参数 —— 固定脚本参数化，省编译、重复同类动作时用。
+- **`--exec-csharp`**（入口，非 backend）：让 **LLM 直接写 C# 脚本**、跳过 JSON 中间层，复用 codeact 的 `execute_code` 一次执行 —— 要最大灵活性、把编排权交给 LLM 时用。
 
-`codeact` 优化的是**往返**，`template` 优化的是**编译** —— 这是三者架构上最本质的分界。
+`codeact` 优化的是**往返**，`template` 优化的是**编译**，`--exec-csharp` 改变的是**脚本作者**（LLM 而非机器翻译）—— 这是各条路线最本质的分界。
