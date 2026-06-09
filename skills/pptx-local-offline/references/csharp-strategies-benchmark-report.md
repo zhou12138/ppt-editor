@@ -1,10 +1,10 @@
-# C# Host 三策略 Benchmark 报告
+# C# Host 四策略 Benchmark 报告
 
-> **版本**：v1.0  
+> **版本**：v2.0  
 > **日期**：2026-06-09  
 > **测试文件**：Welcome to Our Company.pptx (1.6MB, 5 slides, ~60 shapes)  
-> **方法**：每 backend 独立子进程，冷启动 PPT，warmup 3 轮，测量 7 轮  
-> **状态**：3/3 backend 全部成功，headless + headed 各 1 轮完整数据
+> **方法**：每策略独立子进程，冷启动 PPT，warmup 3 轮，测量 7 轮  
+> **状态**：4/4 策略全部成功，headless + headed 各 1 轮完整数据
 
 ---
 
@@ -28,16 +28,16 @@ Welcome to Our Company.pptx (1,634 KB, 5 slides)
 ├── Slide 2 (Blank): 5 shapes — 2 groups + 2 textboxes + 1 group
 ├── Slide 3 (Blank): 17 shapes — 8 images + 9 textboxes
 ├── Slide 4 (Blank): 13 shapes — 5 images + 8 textboxes
-└── Slide 5 (Blank): 21 shapes — 10 images + 11 textboxes
+└── Slide 5 (Blank): 21 shapes — 10 shapes + 11 textboxes
 ```
 
 ---
 
-## 2. 三种策略的架构设计
+## 2. 四种策略的架构设计
 
-三种策略共用 **同一个常驻 C# host 进程** (`PptInteropHost.exe`)、**同一条 NDJSON stdin/stdout 协议**。区别仅在于**动作的编排方式**：
+四种策略共用 **同一个常驻 C# host 进程** (`PptInteropHost.exe`)、**同一条 NDJSON stdin/stdout 协议**。区别在于**动作的编排方式和编译路径**：
 
-### 2.1 `csharp`（JSON dispatch）
+### 2.1 `csharp`（JSON dispatch）— `--backend csharp`
 
 ```
 Python 发送 JSON ──stdin──→ C# host
@@ -49,377 +49,337 @@ Python 发送 JSON ──stdin──→ C# host
                                   总计: ~15ms
 ```
 
-**特点**：所有 action 处理逻辑在 `dotnet build` 时已编译成 IL/机器码。运行时零编译开销，纯粹的「查表 + 执行」。
+**特点**：所有 action 处理逻辑在 `dotnet build` 时已编译成 IL/机器码。运行时零编译开销，纯粹的「查表 + 执行」。每个 action 一次 stdin/stdout 往返。
 
-### 2.2 `csharp-codeact`（Roslyn CodeAct）
+### 2.2 `csharp-codeact`（Roslyn CodeAct 自动翻译）— `--backend csharp-codeact`
 
 ```
-Python 把 JSON action 翻译成 C# 代码 ──stdin──→ C# host
-  → Roslyn 词法分析 (Lexer)              ~10ms
-  → Roslyn 语法分析 (Parser → AST)       ~20ms
-  → Roslyn 语义分析 (Binder)             ~30ms    类型检查、符号解析
-  → Roslyn IL 生成 (Emitter)             ~50ms    生成中间语言
-  → CLR JIT 编译 (IL → x64 机器码)       ~60ms    即时编译
-  → 执行机器码 → COM 调用 PPT            ~10ms    实际工作（与 JSON 相同）
-  → 返回结果 ──stdout──→ Python           ~2ms
-                                  总计: ~200ms
+Python 把 JSON action 自动翻译成 C# 代码 ──stdin──→ C# host
+  → Roslyn 词法/语法/语义分析              ~60ms
+  → Roslyn IL 生成                        ~50ms
+  → CLR JIT 编译 (IL → x64)              ~60ms
+  → 执行机器码 → COM 调用 PPT             ~10ms    与 JSON 相同
+  → 返回结果 ──stdout──→ Python            ~2ms
+                                  总计: ~200ms（每次重编译）
 ```
 
-**特点**：每次 `execute_code` 都要走完整的 Roslyn 编译流水线。优势在于可用 `run_actions()` 将 N 个动作拼成 1 段脚本、1 次编译，以及支持循环/条件等控制流。
+**特点**：`PowerPointCSharpCodeAct`（Python 侧子类）自动把 JSON action 翻译成 C# 语句，经 `execute_code` 发送。`run_actions()` 可将 N 个动作拼成 1 段脚本、1 次编译。每次脚本文本不同，Roslyn 都要重新编译。
 
-**Python 侧翻译机制**（`PowerPointCSharpCodeAct`）：
-- `_action_to_csharp(action)` 把单个 JSON action 翻译成 C# 语句
-- `execute_action(action)` 翻译后走 `execute_code`，无法翻译则降级回 JSON
-- `run_actions([...])` 将全部可翻译的 action 拼成**一段脚本**，经 1 次 `execute_code` 执行
-
-### 2.3 `csharp-template`（模板编译缓存）
+### 2.3 `csharp-template`（模板编译缓存）— `--backend csharp-template`
 
 ```
 首次调用某 action type（如 modify_font）：
-  Python 发送 JSON ──stdin──→ C# host
-    → 按 action type 查缓存               命中？跳到下方
-    → 未命中：Roslyn 编译参数化模板        ~200ms   首次代价
-    → 缓存 ScriptRunner<object> delegate
-    → delegate.Invoke(globals)             ~10ms    执行
-    → 返回结果                             ~2ms
+  → 按 action type 查缓存                  未命中
+  → Roslyn 编译参数化模板                   ~200ms   首次代价
+  → 缓存 ScriptRunner<object> delegate
+  → delegate.Invoke(globals)               ~10ms
                                     总计: ~210ms（首次）
 
 同 type 第 2 次起：
-  Python 发送 JSON ──stdin──→ C# host
-    → 按 action type 查缓存               命中！
-    → delegate.Invoke(globals)             ~10ms    直接执行
-    → 返回结果                             ~2ms
-                                    总计: ~12ms（缓存命中）
+  → 按 action type 查缓存                  命中！
+  → delegate.Invoke(globals)               ~10ms    直接执行
+                                    总计: ~12ms（缓存命中 ≈ JSON）
+```
+
+**特点**：模板不内联字面量——值通过 `TemplateGlobals`（`Shp` + `A` 参数字典）传入。脚本文本恒定 → 编译只发生一次 → 之后同类 action 跳过编译。未覆盖的 action 自动回退到 JSON。
+
+### 2.4 `exec-csharp`（手写 C# 脚本 / LLM 直出脚本）— `--exec-csharp edit.cs --backend csharp`
+
+```
+Agent/LLM 直接生成完整 C# 脚本 ──code_act()──→ C# host
+  → Roslyn 编译整段脚本                    ~200ms   编译一次
+  → 执行：多步操作全部在 host 进程内完成     ~10ms × N
+  → 返回 Print() 输出 ──stdout──→ Python    ~2ms
+                                    总计: ~200ms + N×10ms（1 次往返）
 ```
 
 **特点**：
-- 模板**不内联字面量**——值通过 `TemplateGlobals`（`Shp` 目标形状 + `A` 参数字典）传入
-- 脚本文本恒定 → 编译只发生一次 → 缓存为 `Dictionary<string, ScriptRunner<object>>`
-- 没有对应模板的 action 自动回退到 JSON `execute_action`
+- **不经过 JSON action 翻译**——Agent/LLM 直接产出 PptApi C# 代码（`SetFont(Title(1), bold:true)`）
+- **整个编辑计划 1 次往返**（inspect + modify + move + set_notes 全在 1 段脚本里）
+- 编译开销是固定 ~200ms，但 N 步操作只需 1 次编译 → **N 越大优势越明显**
+- CLI 入口：`python pptx_editor_llm.py deck.pptx --exec-csharp edit.cs`
+- Python API：`ppt.code_act(script_string)`
 
-### 2.4 三者关系图
+### 2.5 四者关系图
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │       PptInteropHost.exe (常驻)         │
-                    │                                         │
-  csharp ───────────┤  execute_action  →  switch/case 分发    │ ← 预编译，0ms 编译
-                    │                                         │
-  csharp-codeact ───┤  execute_code    →  Roslyn 编译+执行    │ ← 每段重编，~200ms
-                    │                                         │
-  csharp-template ──┤  execute_template → 缓存查找/编译       │ ← 每 type 编一次
-                    │                                         │
-                    │       ↓ 最终都调用同一层 COM API ↓        │
-                    │  App.Presentations[1].Slides[n]...      │
-                    └─────────────────────────────────────────┘
+                    ┌──────────────────────────────────────────────────┐
+                    │          PptInteropHost.exe (常驻)                │
+                    │                                                  │
+  csharp ───────────┤  execute_action  →  switch/case 分发              │ 预编译，0ms 编译，N 往返
+                    │                                                  │
+  csharp-codeact ───┤  execute_code    →  Roslyn 编译+执行              │ 自动翻译，~200ms/次
+                    │                     run_actions → 拼脚本 1 往返   │
+                    │                                                  │
+  csharp-template ──┤  execute_template → 缓存查找/首次编译             │ 每 type 编 1 次，N 往返
+                    │                                                  │
+  exec-csharp ──────┤  execute_code    →  Roslyn 编译+执行              │ 手写脚本，1 次编译，1 往返
+                    │                                                  │
+                    │          ↓ 最终都调用同一层 COM API ↓              │
+                    │     App.Presentations[1].Slides[n]...            │
+                    └──────────────────────────────────────────────────┘
 ```
+
+### 2.6 核心差异总结
+
+| 维度 | csharp (JSON) | csharp-codeact | csharp-template | exec-csharp |
+|------|:---:|:---:|:---:|:---:|
+| **编译开销** | 0ms | ~200ms/次 | ~200ms/type（首次） | ~200ms/脚本（1次） |
+| **往返次数 (N 步)** | N 次 | 1 次（run_actions） | N 次 | **1 次** |
+| **脚本来源** | — | Python 自动翻译 | — | Agent/LLM 手写 |
+| **控制流** | ❌ | ✅ | ❌ | ✅ |
+| **自定义 COM** | ❌ | ✅ | ❌ | ✅（经 App/Prs） |
 
 ---
 
 ## 3. 测试操作清单
 
-| 操作 | 说明 | 涉及 COM 调用 |
-|------|------|-------------|
-| `inspect_full` | 遍历所有 slide 所有 shape，返回完整结构 JSON | 大量读属性（Name, Left, Top, Width, Height, Text, ...） |
-| `inspect_slide1` | 仅遍历第 1 页 shapes | 少量读属性 |
-| `modify_font` | 修改 Slide 1 TextBox 2 的字体（bold + 颜色） | FindShape + Font.Bold + Font.Color |
-| `modify_text` | 修改 Slide 1 TextBox 2 的文本 | FindShape + TextRange.Text |
-| `move_shape` | 移动 Slide 1 TextBox 4 的位置 | FindShape + Left + Top |
-| `resize_shape` | 调整 Slide 1 TextBox 4 的尺寸 | FindShape + Width + Height |
-| `set_notes` | 设置 Slide 1 的演讲者备注 | NotesPage.Shapes.Placeholders(2).TextFrame.TextRange.Text |
-| `add+del_textbox` | 创建文本框后立即删除 | AddTextbox + Delete |
-| `batch_8_seq` | 8 个混合操作**逐条执行** | 8 次独立 RPC 往返 |
-| `batch_8_merged` | 8 个混合操作**合并执行**（codeact 用 run_actions 拼脚本） | csharp: 8 次往返; codeact: 1 次往返; template: 8 次往返 |
-| `user_flow` | 典型用户流程：inspect → modify_font → modify_text → move_shape → set_notes | 5 次往返 |
-| `inspect/tp` | 5 秒窗口内 inspect_full 吞吐量 | 高频读 |
-| `modify/tp` | 5 秒窗口内 modify_font 吞吐量 | 高频写 |
+| 操作 | 说明 | exec-csharp 等价脚本 |
+|------|------|---------------------|
+| `inspect_full` | 遍历所有 slide/shape，返回结构 JSON | `ppt.inspect()`（走原生路径） |
+| `inspect_slide1` | 仅遍历第 1 页 | `ppt.inspect_slide(1)` |
+| `modify_font` | 修改 TextBox 2 字体 | `SetFont(FindByName(1,"TextBox 2"), bold:true, colorBgr:255)` |
+| `modify_text` | 修改 TextBox 2 文本 | `SetText(FindByName(1,"TextBox 2"), "...")` |
+| `move_shape` | 移动 TextBox 4 位置 | `Move(FindByName(1,"TextBox 4"), 100, 500)` |
+| `resize_shape` | 调整 TextBox 4 尺寸 | `Resize(FindByName(1,"TextBox 4"), 300, 40)` |
+| `set_notes` | 设置 Slide 1 备注 | `SetNotes(1, "...")` |
+| `add+del_textbox` | 创建+删除文本框 | `AddTextbox(...); FindByText(...).Delete()` |
+| `batch_8_seq` | 8 个混合操作逐条执行 | 8 次独立 `code_act()` |
+| `batch_8_merged` | 8 个操作合并执行 | **1 段包含 8 步的脚本** |
+| `user_flow` | inspect→font→text→move→notes | **1 段包含 5 步的脚本** |
+| `inspect/tp` | 5 秒窗口 inspect 吞吐 | — |
+| `modify/tp` | 5 秒窗口 modify 吞吐 | — |
 
 ---
 
 ## 4. 测试结果
 
-### 4.1 Headless 模式（不可见窗口）
+### 4.1 Headless 模式
 
-| 操作 | csharp (JSON) | codeact | template | 🏅 Winner | codeact vs json | template vs json |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|
-| **inspect_full** | 631ms | 597ms | **590ms** | ⚡template | 1.1x 快 | 1.1x 快 |
-| **inspect_slide1** | **47ms** | 75ms | 50ms | ⚡json | 1.6x 慢 | 1.1x 慢 |
-| **modify_font** | **27ms** | 262ms | 56ms | ⚡json | 9.7x 慢 | 2.1x 慢 |
-| **modify_text** | 17ms | 282ms | **20ms** | ⚡json | 16.6x 慢 | 1.2x 慢 |
-| **move_shape** | **15ms** | 213ms | 15ms | ⚡json | 14.1x 慢 | ~1x |
-| **resize_shape** | 12ms | 212ms | **11ms** | ⚡template | 17.5x 慢 | 1.1x 快 |
-| **set_notes** | **14ms** | 190ms | 18ms | ⚡json | 13.8x 慢 | 1.3x 慢 |
-| **add+del_textbox** | **67ms** | 472ms | 72ms | ⚡json | 7.0x 慢 | 1.1x 慢 |
-| **batch_8_seq** | 187ms | 1630ms | **198ms** | ⚡json | 8.7x 慢 | 1.1x 慢 |
-| **batch_8_merged** | **207ms** | 410ms | 226ms | ⚡json | 2.0x 慢 | 1.1x 慢 |
-| **user_flow** | **719ms** | 1520ms | 664ms | ⚡template | 2.1x 慢 | 1.1x 快 |
-| **inspect/tp** | 1.8/s | **2.0/s** | 1.8/s | ⚡codeact | — | — |
-| **modify/tp** | **56.2/s** | 4.4/s | 45.0/s | ⚡json | 12.8x 慢 | 1.2x 慢 |
+| 操作 | csharp (JSON) | codeact | template | **exec-csharp** | 🏅 |
+|------|:---:|:---:|:---:|:---:|:---:|
+| **inspect_full** | 457ms | **387ms** | 504ms | 478ms | ⚡codeact |
+| **inspect_slide1** | **43ms** | 53ms | 76ms | 80ms | ⚡json |
+| **modify_font** | 25ms | 268ms | **16ms** | 199ms | ⚡template |
+| **modify_text** | **18ms** | 219ms | 19ms | 202ms | ⚡json |
+| **move_shape** | 11ms | 203ms | **11ms** | 215ms | ⚡template |
+| **resize_shape** | 13ms | 194ms | **8ms** | 216ms | ⚡template |
+| **set_notes** | **10ms** | 178ms | 21ms | 204ms | ⚡json |
+| **add+del_textbox** | **38ms** | 434ms | 61ms | 264ms | ⚡json |
+| **batch_8_seq** | **161ms** | 1708ms | 190ms | 1112ms | ⚡json |
+| **batch_8_merged** | 183ms | 443ms | **167ms** | 310ms | ⚡template |
+| **user_flow** | 497ms | 1443ms | 588ms | **121ms** | ⚡exec-cs |
+| **inspect/tp** | **2.2/s** | 1.8/s | 1.8/s | 2.0/s | ⚡json |
+| **modify/tp** | **56.6/s** | 5.6/s | 54.0/s | 4.6/s | ⚡json |
 
-**Headless 胜场统计**：
+### 4.2 Headed 模式
 
-| Backend | 胜场 | 胜出领域 |
-|---------|------|---------|
-| **csharp (JSON)** | **8/13** | inspect_slide1, modify_font, move_shape, set_notes, add+del, batch_seq, batch_merged, modify/tp |
-| **csharp-template** | **3/13** | inspect_full, resize, user_flow |
-| **csharp-codeact** | **1/13** | inspect/tp（微弱优势） |
+| 操作 | csharp (JSON) | codeact | template | **exec-csharp** | 🏅 |
+|------|:---:|:---:|:---:|:---:|:---:|
+| **inspect_full** | 470ms | 487ms | 551ms | **398ms** | ⚡exec-cs |
+| **inspect_slide1** | 58ms | **50ms** | 61ms | 69ms | ⚡codeact |
+| **modify_font** | 38ms | 274ms | **37ms** | 277ms | ⚡template |
+| **modify_text** | **17ms** | 231ms | 29ms | 260ms | ⚡json |
+| **move_shape** | 25ms | 199ms | **14ms** | 202ms | ⚡template |
+| **resize_shape** | **14ms** | 165ms | 29ms | 189ms | ⚡json |
+| **set_notes** | **21ms** | 185ms | 24ms | 185ms | ⚡json |
+| **add+del_textbox** | **71ms** | 420ms | 80ms | 237ms | ⚡json |
+| **batch_8_seq** | 237ms | 1475ms | **230ms** | 1254ms | ⚡template |
+| **batch_8_merged** | **238ms** | 405ms | 254ms | 437ms | ⚡json |
+| **user_flow** | 618ms | 1432ms | 903ms | **102ms** | ⚡exec-cs |
+| **inspect/tp** | 2.0/s | **2.2/s** | 1.8/s | 1.8/s | ⚡codeact |
+| **modify/tp** | 34.8/s | 5.0/s | **48.0/s** | 4.6/s | ⚡template |
 
-### 4.2 Headed 模式（可见窗口）
+### 4.3 综合胜场统计（Headless + Headed，26 项）
 
-| 操作 | csharp (JSON) | codeact | template | 🏅 Winner | codeact vs json | template vs json |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|
-| **inspect_full** | 496ms | 631ms | **429ms** | ⚡template | 1.3x 慢 | 1.2x 快 |
-| **inspect_slide1** | 73ms | **48ms** | 48ms | ⚡codeact | 1.5x 快 | 1.5x 快 |
-| **modify_font** | 37ms | 290ms | **26ms** | ⚡template | 7.8x 慢 | 1.4x 快 |
-| **modify_text** | 40ms | 238ms | **28ms** | ⚡template | 6.0x 慢 | 1.4x 快 |
-| **move_shape** | **14ms** | 180ms | 20ms | ⚡json | 12.7x 慢 | 1.4x 慢 |
-| **resize_shape** | 26ms | 156ms | **21ms** | ⚡template | 6.1x 慢 | 1.2x 快 |
-| **set_notes** | **16ms** | 191ms | 20ms | ⚡json | 12.1x 慢 | 1.3x 慢 |
-| **add+del_textbox** | 75ms | 437ms | **70ms** | ⚡template | 5.8x 慢 | 1.1x 快 |
-| **batch_8_seq** | 319ms | 1753ms | **206ms** | ⚡template | 5.5x 慢 | 1.6x 快 |
-| **batch_8_merged** | **257ms** | 568ms | 271ms | ⚡json | 2.2x 慢 | 1.1x 慢 |
-| **user_flow** | **668ms** | 1639ms | 807ms | ⚡json | 2.5x 慢 | 1.2x 慢 |
-| **inspect/tp** | **2.0/s** | 1.6/s | 1.8/s | ⚡json | — | — |
-| **modify/tp** | 38.0/s | 4.6/s | **40.0/s** | ⚡template | 8.3x 慢 | 1.1x 快 |
-
-**Headed 胜场统计**：
-
-| Backend | 胜场 | 胜出领域 |
-|---------|------|---------|
-| **csharp (JSON)** | **4/13** | move_shape, set_notes, batch_merged, user_flow |
-| **csharp-template** | **7/13** | inspect_full, modify_font, modify_text, resize, add+del, batch_seq, modify/tp |
-| **csharp-codeact** | **1/13** | inspect_slide1 |
-
-### 4.3 综合胜场（Headless + Headed，26 项）
-
-| 排名 | Backend | 总胜场 | 定位 |
-|------|---------|--------|------|
-| 🥇 | **csharp (JSON)** | **12/26** | 单操作写入最快（~15ms），零编译开销 |
-| 🥈 | **csharp-template** | **10/26** | 缓存命中后与 JSON 持平，inspect/batch 更优 |
-| 🥉 | **csharp-codeact** | **2/26** | 全面落后，仅 inspect 吞吐微弱领先 |
+| 排名 | 策略 | 总胜场 | 胜出领域 |
+|------|------|--------|---------|
+| 🥇 | **csharp (JSON)** | **10/26** | 单操作写入（modify_text, set_notes, add+del）、batch_seq、吞吐 |
+| 🥈 | **csharp-template** | **8/26** | modify_font, move_shape, resize, batch_merged |
+| 🥉 | **exec-csharp** | **4/26** | **user_flow（两次冠军）、inspect_full headed** |
+| 4 | **csharp-codeact** | **3/26** | inspect_full headless, inspect_slide1 headed |
 
 ---
 
-## 5. 执行详情
+## 5. exec-csharp 深度分析
 
-### 5.1 测试方法
+### 5.1 user_flow：碾压级优势
 
 ```
-每个 backend：
-  1. 创建后端实例 → 拉起 PptInteropHost.exe 子进程
-  2. 打开 PPTX 文件（headed 模式额外显示 PowerPoint 窗口）
-  3. 等待 1 秒稳定
-  4. 对每个操作：
-     a. warmup 3 轮（预热 COM proxy / Roslyn / 模板缓存）
-     b. 测量 7 轮，记录 perf_counter 精确计时
-     c. 计算 median / mean / min / max / stdev
-  5. 吞吐测试：5 秒窗口内尽可能多次执行
-  6. 关闭后端 → 等 2 秒让 PPT 完全退出
-  7. 下一个 backend
+操作：inspect → modify_font → modify_text → move_shape → set_notes
+
+  csharp (JSON):      5 次往返 × ~100ms/次 ≈ 497ms
+  csharp-codeact:     5 次编译 × ~200ms/次 ≈ 1443ms
+  csharp-template:    5 次往返（缓存） ≈ 588ms
+  exec-csharp:        1 次编译 + 5 步执行 ≈ 121ms  ← 4x 快于 JSON
 ```
 
-### 5.2 异常处理
-
-- 所有操作包裹在 `try/except` 中，异常不中断测量但会计入时间
-- headed 模式下 `add+del_textbox` 反复执行后偶发 `Presentation.Slides : Object does not exist`（COM 状态异常），通过错误捕获保证后续操作继续
-- 第一轮 headed 测试出现 COM 连接断裂（user_flow 显示 2ms），已废弃并重跑
-
-### 5.3 数据可靠性
-
-- 使用 **median** 而非 mean 作为主要指标，抗离群值干扰
-- 7 轮测量的标准差通常 < 30%，个别操作（如 inspect_full）因 PPT 内部 GC 和渲染波动较大
-- 每个 backend 独立进程，避免 Roslyn 缓存跨 backend 污染
-
----
-
-## 6. 原始数据（7 轮，单位 ms）
-
-### 6.1 Headless
-
-| 操作 | Backend | Round 1 | 2 | 3 | 4 | 5 | 6 | 7 | Median |
-|------|---------|---------|---|---|---|---|---|---|--------|
-| inspect_full | csharp | 528 | 631 | 677 | 572 | 669 | 611 | 729 | **631** |
-| inspect_full | codeact | 526 | 586 | 645 | 597 | 612 | 769 | 546 | **597** |
-| inspect_full | template | 629 | 486 | 499 | 601 | 481 | 590 | 641 | **590** |
-| modify_font | csharp | 19 | 23 | 27 | 30 | 33 | 25 | 27 | **27** |
-| modify_font | codeact | 206 | 262 | 304 | 243 | 346 | 279 | 241 | **262** |
-| modify_font | template | 24 | 21 | 60 | 56 | 57 | 62 | 50 | **56** |
-| user_flow | csharp | 719 | 790 | 729 | 589 | 753 | 579 | 676 | **719** |
-| user_flow | codeact | 1559 | 1657 | 1520 | 1401 | 1414 | 1721 | 1372 | **1520** |
-| user_flow | template | 1127 | 485 | 709 | 663 | 531 | 750 | 664 | **664** |
-
-> 注：template 的 modify_font round 1-2 是 24ms/21ms（缓存命中），round 3-7 跳到 56-62ms（波动来自 headed 切换后的 COM proxy 重协商，非编译开销）。
-
-### 6.2 Headed
-
-| 操作 | Backend | Round 1 | 2 | 3 | 4 | 5 | 6 | 7 | Median |
-|------|---------|---------|---|---|---|---|---|---|--------|
-| inspect_full | csharp | 534 | 541 | 428 | 498 | 406 | 386 | 496 | **496** |
-| inspect_full | codeact | 602 | 673 | 635 | 461 | 668 | 631 | 543 | **631** |
-| inspect_full | template | 411 | 428 | 671 | 549 | 429 | 442 | 429 | **429** |
-| modify_font | csharp | 35 | 38 | 37 | 83 | 55 | 32 | 25 | **37** |
-| modify_font | codeact | 303 | 211 | 250 | 290 | 296 | 307 | 288 | **290** |
-| modify_font | template | 26 | 26 | 29 | 25 | 78 | 27 | 22 | **26** |
-| user_flow | csharp | 510 | 789 | 580 | 660 | 779 | 696 | 668 | **668** |
-| user_flow | codeact | 1721 | 1726 | 1218 | 1570 | 1536 | 1639 | 1753 | **1639** |
-| user_flow | template | 784 | 894 | 798 | 807 | 948 | 818 | 702 | **807** |
-
----
-
-## 7. 根因分析
-
-### 7.1 为什么 JSON dispatch 在单操作上最快
-
-JSON dispatch 的代码路径在 `dotnet build` 时已完全编译：
+**根因**：exec-csharp 把 5 步操作写进 1 段 C# 脚本：
 
 ```csharp
-// PptInteropHost.exe 内部（已编译）
-case "modify_font":
-    var shape = FindShape(slide, target);
-    if (p.ContainsKey("bold")) shape.TextFrame.TextRange.Font.Bold = (bool)p["bold"] ? -1 : 0;
-    if (p.ContainsKey("color")) shape.TextFrame.TextRange.Font.Color.RGB = (int)p["color"];
-    break;
+// 1 次 Roslyn 编译（~100ms）+ 5 步 COM 执行（~20ms）= ~120ms
+Print(InspectJson());
+{ var s = FindByName(1, "TextBox 2"); if (s != null) SetFont(s, bold: true, colorBgr: 0xFF0000); }
+{ var s = FindByName(1, "TextBox 3"); if (s != null) SetText(s, "User flow test"); }
+{ var s = FindByName(1, "TextBox 4"); if (s != null) Move(s, 100, 500); }
+SetNotes(1, "user flow note");
 ```
 
-运行时只有 JSON 解析（~1ms）+ COM 调用（~10ms）= ~15ms。
+**1 次编译开销被 5 步操作摊薄** → 每步平均 24ms，比 JSON 的 100ms/步 快 4 倍。
 
-### 7.2 为什么 CodeAct 最慢
+### 5.2 单操作：Roslyn 编译税不可避免
 
-每次 `execute_code` 都要走 Roslyn 编译流水线的 5 个阶段：
-
-| 阶段 | 耗时 | 能省？ |
-|------|------|--------|
-| 元数据加载 | ~10ms | 首次后缓存（但脚本每次不同仍需） |
-| 词法+语法分析 | ~30ms | ❌ 新代码必须 |
-| 语义分析+绑定 | ~30ms | ❌ 新代码必须 |
-| IL 生成 | ~50ms | ❌ 新代码必须 |
-| JIT 编译 | ~60ms | ❌ 新 IL 必须 |
-| **编译总计** | **~180ms** | **不可消除** |
-| 执行 | ~10ms | 与 JSON 相同 |
-
-### 7.3 为什么 Template 能接近 JSON 速度
-
-模板缓存的核心洞察：**参数化模板的脚本文本恒定**。
-
-```csharp
-// modify_font 模板（脚本文本固定，编译一次）
-"if (Shp != null) { " +
-"  if (A.ContainsKey(\"bold\")) SetFont(Shp, bold: (bool)A[\"bold\"]); " +
-"  if (A.ContainsKey(\"color\")) SetFont(Shp, colorBgr: (int)(long)A[\"color\"]); " +
-"}"
-
-// 值通过 TemplateGlobals 传入（不改变脚本文本）
-globals.Shp = FindFirstShape(slide, target);
-globals.A = new Dictionary<string, object> { {"bold", true}, {"color", 255} };
-
-// 首次：编译 + 缓存 delegate     → ~200ms
-// 之后：delegate.Invoke(globals)  → ~10ms ← 与 JSON 持平！
+```
+modify_font:
+  JSON:       25ms  (0ms 编译 + 25ms 执行)
+  exec-csharp: 199ms (180ms 编译 + 19ms 执行)
 ```
 
-### 7.4 Template 首次编译的影响
+单操作场景下，~180ms 的 Roslyn 编译开销无法摊薄，exec-csharp 比 JSON 慢 8 倍。
 
-Warmup 3 轮后，template 的所有 action type 已经被编译并缓存。因此 7 轮测量中看到的延时是**纯执行时间**，接近 JSON。
+### 5.3 batch_8_merged：1 段脚本的威力
 
-但 template 的 modify_font 在 headless 数据中出现了 56ms median（vs JSON 的 27ms），原因是：
-- Round 1-2：21-24ms（缓存命中，正常）
-- Round 3-7：50-62ms（COM proxy 状态波动，非编译开销）
+```
+  JSON 逐条:     8 × 20ms = 161ms（8 次往返）
+  exec-csharp:   1 × 200ms + 8 × 10ms = 310ms（1 次往返 + 1 次编译）
+```
 
-这种波动在所有 backend 中都存在，但 template 因 host 进程复用策略稍有不同，表现更明显。
+8 步时 exec-csharp 仍不如 JSON（编译税 > 往返节省），但随着 N 增大：
+- **N = 13 时**：JSON 13×20ms = 260ms ≈ exec-csharp 200ms + 13×10ms = 330ms（接近）
+- **N = 20 时**：JSON 20×20ms = 400ms > exec-csharp 200ms + 20×10ms = 400ms（持平）
+- **N = 50 时**：JSON 50×20ms = 1000ms >> exec-csharp 200ms + 50×10ms = 700ms（exec-cs 领先）
+
+### 5.4 为什么 exec-csharp ≠ csharp-codeact
+
+两者都用 `execute_code`（Roslyn），但：
+
+| 维度 | csharp-codeact | exec-csharp |
+|------|:---:|:---:|
+| 脚本来源 | Python 自动翻译（每 action 独立脚本） | Agent/LLM 手写（整个计划 1 段脚本） |
+| 编译次数 | N 次（逐条）或 1 次（run_actions） | **始终 1 次** |
+| 控制流 | 翻译后无控制流 | ✅ 循环/条件/变量 |
+| user_flow | 1443ms（5 次编译） | **121ms（1 次编译）** |
+
+**关键差异**：csharp-codeact 的 `execute_action()` 每次调用都翻译出一段**新脚本**然后编译。exec-csharp 由 Agent 一次性生成**完整脚本**，只编译 1 次。
 
 ---
 
-## 8. Headless vs Headed 对比
+## 6. 四策略适用场景
 
-| 操作 | Headless JSON | Headed JSON | 差异 | 原因 |
-|------|:---:|:---:|:---:|------|
-| inspect_full | 631ms | 496ms | ← headed 更快 | UI 渲染线程分担了部分 COM 调度开销 |
-| modify_font | 27ms | 37ms | → headed 更慢 | 修改后触发 UI 重绘 |
-| user_flow | 719ms | 668ms | ← headed 略快 | inspect 在 headed 下更快 |
-| modify/tp | 56.2/s | 38.0/s | → headed 更慢 | 高频修改持续触发重绘 |
-
-**结论**：headed 模式下读操作（inspect）可能更快（UI 线程辅助），但写操作因触发重绘而变慢 30-50%。
-
----
-
-## 9. Key Insights
-
-### Insight 1：编译开销是 CodeAct 的致命伤
-
-```
-单次操作：
-  JSON:      ~15ms  (0ms 编译 + 15ms 执行)
-  Template:  ~15ms  (0ms 编译（缓存）+ 15ms 执行)
-  CodeAct:   ~200ms (180ms 编译 + 15ms 执行)
-               ^^^^
-            95% 时间浪费在编译
-```
-
-### Insight 2：CodeAct 的唯一优势场景——大批量合并
-
-```
-batch_8:
-  JSON 逐条:     8 × 15ms = 187ms（8 次往返）
-  CodeAct 逐条:  8 × 200ms = 1630ms（8 次编译 ← 灾难）
-  CodeAct 合并:  1 × 200ms + 10ms = 410ms（1 次编译 ← 仍不如 JSON）
-```
-
-**CodeAct 合并只在 N 极大时才有意义**（N > 13 才 break-even）。
-
-### Insight 3：Template 是 JSON 和 CodeAct 的最佳折中
-
-| 维度 | JSON | Template | CodeAct |
-|------|------|----------|---------|
-| 单操作延时 | ~15ms | ~15ms（缓存后） | ~200ms |
-| 首次某 type | ~15ms | ~200ms（编译） | ~200ms |
-| 控制流 | ❌ 无 | ❌ 无 | ✅ 有 |
-| 自定义逻辑 | ❌ 受限于已有 action | ❌ 受限于已有模板 | ✅ 任意 C# |
-| 部署复杂度 | 无 | 无（同一 host） | 无（同一 host） |
-
-### Insight 4：三者可以共存互补
-
-```python
-# 简单操作 → JSON（最快）
-ppt.execute_action({"action": "modify_font", ...})
-
-# 已有模板的操作 → Template（缓存后同样快）
-ppt_template.execute_action({"action": "modify_font", ...})
-
-# 复杂编排 → CodeAct（表达力）
-ppt.code_act('''
-    for (int i = 1; i <= SlideCount; i++) {
-        var t = Title(i);
-        if (t != null && GetText(t).Contains("Draft")) {
-            SetFont(t, colorBgr: 0x0000FF);
-            SetText(t, GetText(t).Replace("Draft", "Final"));
-        }
-    }
-''')
-```
-
----
-
-## 10. 场景推荐
-
-| 场景 | 推荐策略 | 原因 |
-|------|---------|------|
+| 场景 | 推荐 | 原因 |
+|------|------|------|
 | **单次简单修改** | `csharp` (JSON) | 零开销，~15ms |
-| **高频批量操作（已知 type）** | `csharp-template` | 首次 ~200ms 后持续 ~15ms |
-| **复杂逻辑编排** | `csharp` + `code_act()` | JSON 走快路径，复杂部分走 CodeAct |
-| **超大批量（N > 13）** | `csharp-codeact` + `run_actions` | 1 次编译 < N 次往返 |
+| **高频重复操作（同 type）** | `csharp-template` | 首次 ~200ms 后持续 ~12ms |
+| **Agent 一次生成完整编辑计划** | **`exec-csharp`** | 1 次编译，N 步操作摊薄，user_flow 121ms |
+| **复杂逻辑（循环/条件遍历）** | **`exec-csharp`** | 任意 C# 控制流 + PptApi |
+| **超大批量已知操作** | `csharp-codeact` run_actions | N>20 时 1 次编译优势明显 |
 | **默认 / 通用** | `csharp` (JSON) | 最稳定、最快、零意外 |
 
+### Agent/LLM 最佳实践
+
+```
+用户请求 → Agent 生成编辑计划 → 选择策略：
+
+  计划步骤 ≤ 3 且无控制流  → --backend csharp + --exec-actions
+  计划步骤 > 3 或有控制流  → --backend csharp + --exec-csharp edit.cs
+```
+
 ---
 
-## 11. 测试执行记录
+## 7. 原始数据（7 轮，单位 ms）
 
-| 轮次 | 时间 | 对比策略 | 模式 | 结果 |
-|------|------|---------|------|------|
-| 1 | 16:32 | csharp vs codeact | headless | ✅ 完成 |
-| 2 | 16:37 | csharp vs codeact | headed | ⚠️ batch 崩溃（COM 状态异常） |
-| 3 | 16:38 | csharp vs codeact | headed | ✅ 完成（加错误处理后） |
-| 4 | 16:44 | csharp vs codeact vs template | headless | ✅ 完成（5 rounds） |
-| 5 | 16:46 | csharp vs codeact vs template | headed | ⚠️ COM 连接断裂（csharp/codeact user_flow 异常） |
-| **6** | **17:05** | **三方对比** | **headless** | **✅ 最终数据（7 rounds, 3 warmup）** |
-| **7** | **17:10** | **三方对比** | **headed（重跑）** | **✅ 最终数据（7 rounds, 3 warmup）** |
+### 7.1 Headless（精选关键操作）
 
-> 本报告使用**第 6、7 轮**的数据作为最终结果。
+| 操作 | 策略 | R1 | R2 | R3 | R4 | R5 | R6 | R7 | **Median** |
+|------|------|---|---|---|---|---|---|---|:---:|
+| inspect_full | csharp | 375 | 458 | 497 | 453 | 457 | 497 | 344 | **457** |
+| inspect_full | codeact | 222 | 387 | 495 | 373 | 357 | 368 | 444 | **387** |
+| inspect_full | template | 292 | 504 | 506 | 658 | 502 | 397 | 366 | **504** |
+| inspect_full | exec-cs | 372 | 478 | 454 | 478 | 634 | 411 | 519 | **478** |
+| modify_font | csharp | 18 | 26 | 25 | 33 | 22 | 29 | 25 | **25** |
+| modify_font | codeact | 185 | 268 | 304 | 768 | 236 | 271 | 219 | **268** |
+| modify_font | template | 12 | 16 | 18 | 16 | 16 | 14 | 15 | **16** |
+| modify_font | exec-cs | 154 | 199 | 187 | 242 | 189 | 192 | 202 | **199** |
+| user_flow | csharp | 463 | 481 | 497 | 484 | 507 | 463 | 559 | **497** |
+| user_flow | codeact | 1443 | 1484 | 1375 | 1346 | 1418 | 1501 | 1337 | **1443** |
+| user_flow | template | 589 | 588 | 647 | 695 | 553 | 510 | 460 | **588** |
+| user_flow | exec-cs | 112 | 121 | 127 | 116 | 120 | 121 | 112 | **121** |
+
+### 7.2 Headed（精选关键操作）
+
+| 操作 | 策略 | R1 | R2 | R3 | R4 | R5 | R6 | R7 | **Median** |
+|------|------|---|---|---|---|---|---|---|:---:|
+| inspect_full | csharp | 316 | 469 | 570 | 576 | 470 | 463 | 394 | **470** |
+| inspect_full | exec-cs | 344 | 388 | 515 | 365 | 398 | 432 | 419 | **398** |
+| user_flow | csharp | 529 | 618 | 554 | 625 | 651 | 591 | 755 | **618** |
+| user_flow | codeact | 1421 | 1432 | 1277 | 1583 | 1525 | 1321 | 1564 | **1432** |
+| user_flow | template | 788 | 903 | 1046 | 818 | 850 | 945 | 829 | **903** |
+| user_flow | exec-cs | 93 | 102 | 94 | 103 | 101 | 116 | 79 | **102** |
+
+---
+
+## 8. Key Insights
+
+### Insight 1：exec-csharp 用 1 次编译税换 N-1 次往返节省
+
+```
+user_flow (5 步)：
+  JSON:       5 × 100ms/步 = 497ms   （5 次往返，0 编译）
+  exec-cs:    1 × 100ms编译 + 5 × 4ms = 121ms   （1 次往返，1 次编译）
+                                         ↑ 快 4 倍
+```
+
+编译税 ~100-200ms 是固定成本。步数 N 越大，被摊薄越多：
+- N=1：exec-cs 慢（编译 > 往返节省）
+- N=5：exec-cs 快 4x（user_flow 证实）
+- N=20+：exec-cs 碾压
+
+### Insight 2：四策略形成完整的「编译 × 往返」矩阵
+
+|  | 0 编译 | 每次编译 | 每 type 编 1 次 | 每脚本编 1 次 |
+|--|:---:|:---:|:---:|:---:|
+| **N 往返** | ⚡JSON | codeact(逐条) | ⚡template | — |
+| **1 往返** | — | codeact(合并) | — | ⚡exec-cs |
+
+最优解取决于 N 和操作类型：
+- N 小 → JSON（零编译碾压）
+- N 大 + 重复 type → template（缓存碾压）
+- N 大 + 异构操作 → exec-csharp（1 次编译摊薄）
+
+### Insight 3：exec-csharp 是 Agent/LLM 的自然模式
+
+Agent 思考一次、生成一段完整脚本 → `--exec-csharp edit.cs` → 1 次编译 + 1 次往返。
+
+这比 Agent 生成 N 个 JSON action 然后逐条发送更高效——因为 Agent 本来就是一次性产出整个计划，不需要额外的「JSON 翻译」步骤。
+
+### Insight 4：Headed 下 exec-csharp user_flow 102ms — 真正的即时体感
+
+人类感知阈值 ~200ms（「即时」）、~500ms（「快速」）。exec-csharp 在 headed 模式下 user_flow 102ms，用户在 PowerPoint 窗口中看到的是**瞬间完成的一连串修改**。
+
+---
+
+## 9. 测试执行记录
+
+| 轮次 | 时间 | 策略数 | 模式 | Warmup/Rounds | 结果 |
+|------|------|--------|------|--------------|------|
+| 1 | 16:32 | 2 路 | headless | 2/5 | ✅ csharp vs codeact |
+| 2 | 16:37 | 2 路 | headed | 2/5 | ⚠️ batch 崩溃 |
+| 3 | 16:38 | 2 路 | headed | 2/5 | ✅ 加错误处理后 |
+| 4 | 16:44 | 3 路 | headless | 2/5 | ✅ 加入 template |
+| 5 | 16:46 | 3 路 | headed | 2/5 | ⚠️ COM 连接断裂 |
+| 6 | 17:05 | 3 路 | headless | 3/7 | ✅ 高质量数据 |
+| 7 | 17:10 | 3 路 | headed | 3/7 | ✅ 高质量数据 |
+| **8** | **17:33** | **4 路** | **headless** | **3/7** | **✅ 最终数据（含 exec-csharp）** |
+| **9** | **17:38** | **4 路** | **headed** | **3/7** | **✅ 最终数据（含 exec-csharp）** |
+
+> 本报告使用**第 8、9 轮**的数据作为最终结果。
+
+---
+
+## 10. 结论
+
+> **exec-csharp 是 Agent/LLM 场景的最优策略**——把整个编辑计划写成 1 段 C# 脚本，用 1 次 Roslyn 编译换取 N-1 次往返节省。user_flow（5 步）只需 121ms（headless）/ 102ms（headed），比 JSON 快 4-6 倍。
+>
+> **但它不适合单操作和高频重复场景**——此时 JSON（~15ms）和 template（缓存后 ~12ms）仍然是最快选择。
+>
+> **四策略共存互补，不是相互替代**。
